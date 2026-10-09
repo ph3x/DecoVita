@@ -917,8 +917,9 @@ _STR = {
     "stat_lines": {"de": "Zeilen", "en": "lines"},
     "stat_uncertain": {"de": "unsichere Zeilen", "en": "uncertain lines"},
     "stat_guide": {"de": "Sessions/Schritte/Ausfälle", "en": "sessions/steps/drops"},
-    "gui_outdir": {"de": "Zielordner (leer = neben der Eingabe):",
-                   "en": "Output folder (empty = next to input):"},
+    "gui_source": {"de": "Quelle:", "en": "Source:"},
+    "gui_outdir": {"de": "Zielordner (leer = Quellordner):",
+                   "en": "Output folder (empty = source folder):"},
     "bad_outdir": {"de": "Zielordner ist eine Datei: %s", "en": "Output folder is a file: %s"},
 }
 
@@ -978,7 +979,7 @@ def build_parser():
         description="Decode, redact and convert ToupTek StellaVita logs. "
                     "Unofficial tool, no connection to ToupTek.")
     p.add_argument("paths", nargs="*", help="files or folders")
-    p.add_argument("-o", "--out", help="output folder (default: next to input)")
+    p.add_argument("-o", "--out", help="output folder (default: next to input; created if missing)")
     p.add_argument("-r", "--recursive", action="store_true", help="recurse into subfolders")
     p.add_argument("--force", action="store_true", help="overwrite existing outputs")
     p.add_argument("--no-phd2", dest="phd2", action="store_false",
@@ -1123,23 +1124,27 @@ def build_gui(root, lang):
     root.title("StellaVita Log Tool v%s" % TOOL_VERSION)
     pad = {"padx": 8, "pady": 4}
 
+    # source and output folder share one grid, so both entries line up (issue #12)
     sel = tk.StringVar()
-    rowf = tk.Frame(root); rowf.pack(fill="x", **pad)
-    tk.Entry(rowf, textvariable=sel).pack(side="left", fill="x", expand=True)
-    tk.Button(rowf, text=("Datei..." if de else "File..."),
+    outv = tk.StringVar()
+    iof = tk.Frame(root); iof.pack(fill="x", **pad)
+    iof.columnconfigure(1, weight=1)
+    tk.Label(iof, text=_t(lang, "gui_source")).grid(row=0, column=0, sticky="w")
+    ent_src = tk.Entry(iof, textvariable=sel)
+    ent_src.grid(row=0, column=1, sticky="ew")
+    srcb = tk.Frame(iof); srcb.grid(row=0, column=2, sticky="w")
+    tk.Button(srcb, text=("Datei..." if de else "File..."),
               command=lambda: sel.set(filedialog.askopenfilename() or sel.get())
               ).pack(side="left")
-    tk.Button(rowf, text=("Ordner..." if de else "Folder..."),
+    tk.Button(srcb, text=("Ordner..." if de else "Folder..."),
               command=lambda: sel.set(filedialog.askdirectory() or sel.get())
               ).pack(side="left")
-
-    outv = tk.StringVar()
-    outf = tk.Frame(root); outf.pack(fill="x", **pad)
-    tk.Label(outf, text=_t(lang, "gui_outdir")).pack(side="left")
-    tk.Entry(outf, textvariable=outv).pack(side="left", fill="x", expand=True)
-    tk.Button(outf, text=("Ordner..." if de else "Folder..."),
+    tk.Label(iof, text=_t(lang, "gui_outdir")).grid(row=1, column=0, sticky="w")
+    ent_out = tk.Entry(iof, textvariable=outv)
+    ent_out.grid(row=1, column=1, sticky="ew")
+    tk.Button(iof, text=("Ordner..." if de else "Folder..."),
               command=lambda: outv.set(filedialog.askdirectory() or outv.get())
-              ).pack(side="left")
+              ).grid(row=1, column=2, sticky="w")
 
     opt = tk.Frame(root); opt.pack(fill="x", **pad)
     v_rec = tk.BooleanVar(value=False)
@@ -1215,7 +1220,8 @@ def build_gui(root, lang):
                 out.append(w)
         return out
 
-    return types.SimpleNamespace(root=root, sel=sel, out=outv, rec=v_rec, phd2=v_phd2,
+    return types.SimpleNamespace(root=root, sel=sel, out=outv, ent_src=ent_src,
+                                 ent_out=ent_out, rec=v_rec, phd2=v_phd2,
                                  date=v_date, force=v_force, cats=cvars, text=txt,
                                  bar=bar, btn_dry=b_dry, btn_run=b_run, go=go,
                                  all_widgets=all_widgets)

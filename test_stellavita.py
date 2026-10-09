@@ -709,7 +709,16 @@ def t_cli(fx, tmp):
     py = sys.executable
     p = subprocess.run([py, TOOL, "--help"], capture_output=True, text=True)
     check("--help", p.returncode == 0 and "--no-redact-location" in p.stdout)
+    check("--help: -o legt den Ordner bei Bedarf an", "created if missing" in " ".join(p.stdout.split()))
     out = os.path.join(tmp, "o_cli")
+    nested = os.path.join(tmp, "o_cli_new", "a", "b")
+    p = subprocess.run([py, TOOL, fx["glog"], "-o", nested], capture_output=True, text=True)
+    check("-o: nicht vorhandener (verschachtelter) Ordner wird angelegt",
+          p.returncode == 0 and os.listdir(nested) == ["libtoupcam_latest_redacted.glog"],
+          (p.stderr or p.stdout)[-300:])
+    nested_rep = os.path.join(tmp, "o_cli_rep_new", "a")
+    subprocess.run([py, TOOL, fx["glog"], "-o", nested_rep, "--report"], capture_output=True, text=True)
+    check("-o mit --report: Ordner wird nicht angelegt", not os.path.exists(os.path.dirname(nested_rep)))
     p = subprocess.run([py, TOOL, fx["dir"], "-o", out, "--lang", "de"], capture_output=True, text=True)
     check("Ordnerlauf Exitcode 0", p.returncode == 0, p.stderr[-300:])
     check("deutsche Meldungen", "Fertig:" in p.stdout, p.stdout[:200])
@@ -859,7 +868,8 @@ for scale in (1.3333, 1.6667, 2.0):
         res["%s@%s" % (name, scale)] = {
             "size": [root.winfo_width(), root.winfo_height()],
             "req": [root.winfo_reqwidth(), root.winfo_reqheight()],
-            "widgets": all(visible(root, w) for w in g.all_widgets())}
+            "widgets": all(visible(root, w) for w in g.all_widgets()),
+            "entries": [[e.winfo_rootx(), e.winfo_width()] for e in (g.ent_src, g.ent_out)]}
     root.destroy()
 root = tk.Tk()
 g = sv.build_gui(root, lang)
@@ -903,6 +913,8 @@ def _gui_layout_and_outdir(fx, tmp, env):
             k = "%s@%s" % (name, scale)
             check("Skalierung %s, %s: alle Bedienelemente sichtbar (inkl. Probelauf/Start)"
                   % (label, what), r[k]["widgets"], str(r[k]))
+            check("Skalierung %s, %s: Quelle- und Zielordner-Feld gleich ausgerichtet"
+                  % (label, what), r[k]["entries"][0] == r[k]["entries"][1], str(r[k]["entries"]))
     check("Zielordner: Probelauf legt ihn nicht an", r["dry_created"] is False)
     check("Zielordner: wird angelegt und enthaelt die Ausgaben",
           r["out_files"] == ["GuideLog_2026-01-15_201500_decoded.txt",
