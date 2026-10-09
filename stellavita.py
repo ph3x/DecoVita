@@ -41,7 +41,8 @@ import argparse
 #  Version / known-good markers
 # ----------------------------------------------------------------------------
 
-TOOL_VERSION = "1.0.1"
+TOOL_VERSION = "1.1.0"
+COPYRIGHT = "Copyright (C) 2026 ph3x"
 KNOWN_APP_VERSIONS = ("2.0.37",)      # GuideLog "Version:" values seen so far
 KNOWN_PROTOCOL = ("2",)               # GuideLog "Version protocol:" values
 
@@ -917,6 +918,14 @@ _STR = {
     "stat_lines": {"de": "Zeilen", "en": "lines"},
     "stat_uncertain": {"de": "unsichere Zeilen", "en": "uncertain lines"},
     "stat_guide": {"de": "Sessions/Schritte/Ausfälle", "en": "sessions/steps/drops"},
+    "gpl_notice": {"de": "StellaVita Log Tool v%s - %s\n"
+                          "Dieses Programm kommt OHNE JEDE GEWÄHRLEISTUNG. Es ist freie "
+                          "Software (GPL-3.0-or-later); Weitergabe unter deren Bedingungen "
+                          "ist erlaubt, siehe LICENSE.",
+                   "en": "StellaVita Log Tool v%s - %s\n"
+                          "This program comes with ABSOLUTELY NO WARRANTY. It is free "
+                          "software (GPL-3.0-or-later); you may redistribute it under its "
+                          "conditions, see LICENSE."},
     "gui_source": {"de": "Quelle:", "en": "Source:"},
     "gui_outdir": {"de": "Zielordner (leer = Quellordner):",
                    "en": "Output folder (empty = source folder):"},
@@ -926,6 +935,11 @@ _STR = {
 
 def _t(lang, key):
     return _STR[key][lang]
+
+
+def gpl_notice(lang):
+    """Short start notice for interactive use, as recommended by the GPL."""
+    return _t(lang, "gpl_notice") % (TOOL_VERSION, COPYRIGHT)
 
 
 def _cat_summary(counts, lang):
@@ -977,7 +991,8 @@ def build_parser():
     p = argparse.ArgumentParser(
         prog="stellavita.py",
         description="Decode, redact and convert ToupTek StellaVita logs. "
-                    "Unofficial tool, no connection to ToupTek.")
+                    "Unofficial tool, no connection to ToupTek.",
+        epilog=gpl_notice("en").replace("\n", " "))
     p.add_argument("paths", nargs="*", help="files or folders")
     p.add_argument("-o", "--out", help="output folder (default: next to input; created if missing)")
     p.add_argument("-r", "--recursive", action="store_true", help="recurse into subfolders")
@@ -1050,7 +1065,7 @@ def _summary(n, secs, lang):
 
 def run_menu(lang):
     de = lang == "de"
-    print("StellaVita Log Tool v%s" % TOOL_VERSION)
+    print(gpl_notice(lang))
     print("(unofficial / inoffiziell)")
     prompt = "Datei oder Ordner: " if de else "File or folder: "
     path = input(prompt).strip().strip('"')
@@ -1173,6 +1188,7 @@ def build_gui(root, lang):
     b_run.pack(side="right")
     bar = ttk.Progressbar(root, maximum=100); bar.pack(side="bottom", fill="x", **pad)
     txt = tk.Text(root, height=6); txt.pack(fill="both", expand=True, **pad)
+    txt.insert("end", gpl_notice(lang) + "\n")      # replaced by the log on the first run
 
     # Size from what the widgets actually need (fonts, display scaling), so nothing
     # is cut off; 640x560 is only the preferred minimum.

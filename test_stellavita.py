@@ -7,11 +7,11 @@
 # which is licensed under the GPL v3. Copyright of that code remains with the
 # phdlogview authors.
 """
-Test suite for stellavita.py (Version 1).
+Test suite for stellavita.py.
 
 Builds synthetic, fully fictitious log files (all SSIDs, passwords, serial
 numbers, IPs and coordinates below are made up), encrypts them with the
-inverse cipher, runs the tool and checks every promised V1 behaviour.
+inverse cipher, runs the tool and checks every documented behaviour.
 
 Run:  python3 test_stellavita.py [path/to/stellavita.py]
 """
@@ -369,7 +369,7 @@ def phdlogview_parse(lines):
 # ---------------------------------------------------------------------------
 
 def t_cipher():
-    print("\n[1] Chiffre")
+    print("\n[1] Cipher")
     rnd = random.Random(1)
     alpha = "".join(chr(c) for c in range(33, 126)) + " "
     ok = True
@@ -378,10 +378,10 @@ def t_cipher():
         t0 = rnd.randint(0, 94)
         if sv.decode_line(sv.encode_line(txt, t0), t0) != txt:
             ok = False; break
-    check("Round-trip 3000 Zufallszeilen exakt", ok)
-    check("'~' kollidiert erwartungsgemaess mit Leerzeichen",
+    check("Round trip of 3000 random lines is exact", ok)
+    check("'~' collides with space as expected",
           sv.decode_line(sv.encode_line("a~b", 5), 5) == "a b")
-    check("Bytes ausserhalb 33..126 werden durchgereicht",
+    check("Bytes outside 33..126 pass through unchanged",
           sv.decode_line(b"\t", 3) == "\t")
     # timestamp anchoring
     ok = True
@@ -394,42 +394,42 @@ def t_cipher():
         d2, anch2, _ = sv.recover(sv.encode_line(line2, t0))
         if d2 != line2 or not anch2:
             ok = False
-    check("Zeilen mit Zeitstempel fuer alle 95 Schluessel sicher erkannt", ok)
+    check("Timestamped lines recovered with certainty for all 95 keys", ok)
 
 
 def t_sniff(fx):
-    print("\n[2] Dateityp-Erkennung")
-    check("verschluesseltes GuideLog", sv.sniff(fx["guide"]) == ("guide", False), str(sv.sniff(fx["guide"])))
-    check("verschluesseltes DebugLog", sv.sniff(fx["debug"]) == ("debug", False), str(sv.sniff(fx["debug"])))
-    check("Klartext-GuideLog", sv.sniff(fx["guide_plain"]) == ("guide", True), str(sv.sniff(fx["guide_plain"])))
-    check("Klartext-DebugLog", sv.sniff(fx["debug_plain"]) == ("debug", True), str(sv.sniff(fx["debug_plain"])))
+    print("\n[2] File type detection")
+    check("encrypted GuideLog", sv.sniff(fx["guide"]) == ("guide", False), str(sv.sniff(fx["guide"])))
+    check("encrypted DebugLog", sv.sniff(fx["debug"]) == ("debug", False), str(sv.sniff(fx["debug"])))
+    check("plain-text GuideLog", sv.sniff(fx["guide_plain"]) == ("guide", True), str(sv.sniff(fx["guide_plain"])))
+    check("plain-text DebugLog", sv.sniff(fx["debug_plain"]) == ("debug", True), str(sv.sniff(fx["debug_plain"])))
     check(".glog", sv.sniff(fx["glog"]) == ("glog", True), str(sv.sniff(fx["glog"])))
-    check("unbekannte Datei", sv.sniff(fx["unknown"])[0] == "unknown", str(sv.sniff(fx["unknown"])))
+    check("unknown file", sv.sniff(fx["unknown"])[0] == "unknown", str(sv.sniff(fx["unknown"])))
 
 
 def t_decode_exact(fx, tmp):
-    print("\n[3] Dekodierung (ohne Schwaerzen) gleich Klartext")
+    print("\n[3] Decoding (without redaction) equals plain text")
     out = os.path.join(tmp, "o_dec")
     os.makedirs(out)
     r = sv.process_file(fx["guide"], out_dir=out, enabled=(), make_phd2=False, log=quiet)
     got = body(r["outputs"][0])
     exp = fx["guide_lines"]
     bad = [i for i, (g, e) in enumerate(zip(got, exp)) if g != e]
-    check("GuideLog: alle %d Zeilen exakt" % len(exp), len(got) == len(exp) and not bad,
-          "Abweichungen bei %s" % bad[:5])
-    check("GuideLog: keine unsicheren Zeilen", r["uncertain"] == 0, str(r["uncertain"]))
+    check("GuideLog: all %d lines exact" % len(exp), len(got) == len(exp) and not bad,
+          "mismatches at %s" % bad[:5])
+    check("GuideLog: no uncertain lines", r["uncertain"] == 0, str(r["uncertain"]))
     r = sv.process_file(fx["debug"], out_dir=out, enabled=(), full_date=False, log=quiet)
     got = body(r["outputs"][0])
     exp = fx["debug_lines"]
     bad = [i for i, (g, e) in enumerate(zip(got, exp)) if g != e]
-    check("DebugLog: alle %d Zeilen exakt (inkl. Kamera-Einstellungsliste)" % len(exp),
-          len(got) == len(exp) and not bad, "Abweichungen bei %s" % bad[:5])
+    check("DebugLog: all %d lines exact (incl. camera config dump)" % len(exp),
+          len(got) == len(exp) and not bad, "mismatches at %s" % bad[:5])
     # the bit-string line '1111...000' is inherently ambiguous (a shifted key gives
     # another all-digit string), so exactly that one line must be flagged uncertain
-    check("DebugLog: genau die mehrdeutige Ziffernzeile als unsicher markiert",
+    check("DebugLog: exactly the ambiguous digit line is flagged uncertain",
           r["uncertain"] == 1, str(r["uncertain"]))
     _, anch, mg = sv.recover(sv.encode_line("  Label      : ISO Speed", 40), sv.train_model(fx["debug"]))
-    check("eindeutige Textzeile ohne Anker: hoher Abstand", not anch and mg >= sv.UNCERTAIN_MARGIN, "%.1f" % mg)
+    check("unambiguous text line without anchor: large margin", not anch and mg >= sv.UNCERTAIN_MARGIN, "%.1f" % mg)
 
 
 def _debug_out(fx, tmp, name, enabled, full_date=False):
@@ -440,72 +440,72 @@ def _debug_out(fx, tmp, name, enabled, full_date=False):
 
 
 def t_redact(fx, tmp):
-    print("\n[4] Schwaerzen (alle Kategorien an)")
+    print("\n[4] Redaction (all categories on)")
     F = FAKE
     r, txt = _debug_out(fx, tmp, "o_red", sv.CATEGORIES)
     # hotspot
     for k in ("ssid_short", "ssid_long", "password"):
-        check("Hotspot: '%s' nirgends mehr enthalten" % k, F[k] not in txt)
-    check("Hotspot: SSIDs nummeriert (<SSID_1>, <SSID_2>)", "<SSID_1>" in txt and "<SSID_2>" in txt)
-    check("Hotspot: kein Rest '_EXT' (laengere SSID zuerst ersetzt)", "_EXT" not in txt)
+        check("Hotspot: '%s' gone everywhere" % k, F[k] not in txt)
+    check("Hotspot: SSIDs numbered (<SSID_1>, <SSID_2>)", "<SSID_1>" in txt and "<SSID_2>" in txt)
+    check("Hotspot: no leftover '_EXT' (longer SSID replaced first)", "_EXT" not in txt)
     long_tok = re.search(r'"ssid":"(<SSID_\d>)"', txt).group(1)
-    check("Hotspot: Freitext-Vorkommen mit gleichem Platzhalter ersetzt",
+    check("Hotspot: free-text occurrence replaced with the same placeholder",
           ("connected to %s ok" % long_tok) in txt)
-    check("Hotspot: Passwortfelder -> <REDACTED>",
+    check("Hotspot: password fields -> <REDACTED>",
           '"password":"<REDACTED>"' in txt and '"wifi_password":"<REDACTED>"' in txt)
     # network
-    check("Netz: 3. Oktett maskiert, Geraet bleibt erkennbar (192.168.<N1>.23)",
+    check("Network: 3rd octet masked, device stays distinguishable (192.168.<N1>.23)",
           "ipv4:192.168.<N1>.23:44034" in txt)
-    check("Netz: Gateway im selben Netz gleicher Platzhalter (192.168.<N1>.1)",
+    check("Network: gateway in the same subnet gets the same token (192.168.<N1>.1)",
           '"connected_bridge_wifi_gateway":"192.168.<N1>.1"' in txt)
-    check("Netz: zweites Netz eigener Platzhalter (192.168.<N2>.5)", '"ip":"192.168.<N2>.5"' in txt)
-    check("Netz: 'ip:'-Info maskiert", '"info":"ip:192.168.<N1>.23"' in txt)
-    check("Netz: Subnetzmasken unveraendert", txt.count('255.255.255.0') == 2)
-    check("Netz: Versionsnummern unveraendert (1.2.3.4, 60.32549.20260908)",
+    check("Network: second subnet gets its own token (192.168.<N2>.5)", '"ip":"192.168.<N2>.5"' in txt)
+    check("Network: 'ip:' info masked", '"info":"ip:192.168.<N1>.23"' in txt)
+    check("Network: subnet masks unchanged", txt.count('255.255.255.0') == 2)
+    check("Network: version strings unchanged (1.2.3.4, 60.32549.20260908)",
           '"poaefw_sdk_version":"1.2.3.4"' in txt and "60.32549.20260908" in txt)
     for ip in ("192.168.77.", "192.168.88."):
-        check("Netz: '%s' nirgends mehr" % ip, ip not in txt)
+        check("Network: '%s' gone everywhere" % ip, ip not in txt)
     # location
     for k in ("lat_json", "lon_json", "lat_json7", "lon_json7", "lat_indi", "lon_indi",
               "elev", "alt", "az", "lst", "utc", "spa_alt"):
-        check("Standort: Originalwert %s weg" % k, F[k] not in txt)
-    check("Standort: JSON-Koordinaten auf 1 Nachkommastelle",
+        check("Location: original value %s gone" % k, F[k] not in txt)
+    check("Location: JSON coordinates rounded to 1 decimal",
           '"latitude":12.3,"longitude":-23.5' in txt)
-    check("Standort: INDI LAT/LONG gerundet",
+    check("Location: INDI LAT/LONG rounded",
           "name = LAT, label = Lat (dd:mm:ss), value = 12.3," in txt and
           "name = LONG, label = Lon (dd:mm:ss), value = 336.5," in txt)
     for nm in ("ELEV", "ALT", "AZ", "LST", "SYNCPOLARALIGN_ALT"):
-        check("Standort: %s-Wert -> <REDACTED>" % nm,
+        check("Location: %s value -> <REDACTED>" % nm,
               re.search(r"name = %s, .*value = <REDACTED>" % nm, txt) is not None)
-    check("Standort: UTC-Zeit -> <REDACTED>", "name = UTC, label = UTC Time, text = <REDACTED>" in txt)
-    check("Standort: RA/DEC bleiben", "value = 1.330000" in txt and "value = 58.300000" in txt)
+    check("Location: UTC time -> <REDACTED>", "name = UTC, label = UTC Time, text = <REDACTED>" in txt)
+    check("Location: RA/DEC kept", "value = 1.330000" in txt and "value = 58.300000" in txt)
     # serial
     for k in ("serial32", "serial12", "artist"):
-        check("Seriennr.: '%s' weg" % k, F[k] not in txt)
-    check("Seriennr.: leeres Besitzerfeld bleibt leer",
+        check("Serial: '%s' gone" % k, F[k] not in txt)
+    check("Serial: empty owner field stays empty",
           re.search(r"Config: /main/settings/ownername\n(?:.*\n){3}  Current    : \n", txt + "\n") is not None)
-    check("Seriennr.: ISO-Wert (nicht sensibel) bleibt", "  Current    : 1600" in txt)
-    check("Seriennr.: CONNECTION_SERIAL-Schalter bleibt",
+    check("Serial: ISO value (not sensitive) kept", "  Current    : 1600" in txt)
+    check("Serial: CONNECTION_SERIAL switch kept",
           "name = CONNECTION_SERIAL, label = Serial, state = on" in txt)
-    check("Zaehler je Kategorie > 0", all(r["redactions"][c] > 0 for c in sv.CATEGORIES),
+    check("Counter per category > 0", all(r["redactions"][c] > 0 for c in sv.CATEGORIES),
           str(r["redactions"]))
 
 
 def t_redact_doubt():
-    print("\n[5] Schwaerzen im Zweifel (fehlerhaft dekodierte Zeile im Seriennr.-Block)")
+    print("\n[5] Redaction when in doubt (mis-decoded line in a serial block)")
     red = sv.Redactor(sv.CATEGORIES)
     seq = ["Config: /main/status/serialnumber", "  Label      : Serial Number",
            "mm2daaT]cmmmm)m }}FAKEGARBLE", "[20:00:00.000] next", "Config: /main/imgsettings/iso",
            "zz garbled but not sensitive"]
     out = [red.feed(l) for l in seq]
-    check("unbekannte Zeile im sensiblen Block -> ganze Zeile <REDACTED>", out[2] == sv.REDACTED, out[2])
-    check("Label-Zeile bleibt", out[1] == seq[1])
-    check("Block endet bei Zeitstempel-Zeile", out[3] == seq[3])
-    check("nicht sensibler Block bleibt unangetastet", out[5] == seq[5])
+    check("unknown line in a sensitive block -> whole line <REDACTED>", out[2] == sv.REDACTED, out[2])
+    check("Label line kept", out[1] == seq[1])
+    check("Block ends at a timestamped line", out[3] == seq[3])
+    check("non-sensitive block left untouched", out[5] == seq[5])
 
 
 def t_toggles(fx, tmp):
-    print("\n[6] Kategorien einzeln abschaltbar")
+    print("\n[6] Categories can be switched off individually")
     F = FAKE
     probes = {"hotspot": F["ssid_long"], "network": F["ip_dev"],
               "location": F["lat_indi"], "serial": F["serial32"]}
@@ -514,157 +514,157 @@ def t_toggles(fx, tmp):
         _, txt = _debug_out(fx, tmp, "o_tog_" + off, en)
         ok_off = probes[off] in txt
         ok_on = all(probes[c] not in txt for c in en)
-        check("ohne '%s': deren Daten bleiben, Rest geschwaerzt" % off, ok_off and ok_on)
+        check("without '%s': its data kept, rest redacted" % off, ok_off and ok_on)
     _, txt = _debug_out(fx, tmp, "o_tog_none", ())
-    check("--no-redact: alles bleibt", all(v in txt for v in probes.values()))
+    check("--no-redact: everything kept", all(v in txt for v in probes.values()))
 
 
 def t_header(fx, tmp):
-    print("\n[7] Kennzeichnung in der Ausgabe")
+    print("\n[7] Output header")
     out = os.path.join(tmp, "o_hdr")
     os.makedirs(out)
     r = sv.process_file(fx["debug"], out_dir=out, enabled=("hotspot", "serial"),
                         full_date=False, lang="de", log=quiet)
     head = [l for l in open(r["outputs"][0], encoding="utf-8").read().split("\n") if l.startswith("# ")]
-    check("Kopfzeile DE nennt nur aktive Kategorien",
+    check("Header DE lists only active categories",
           "# Geschwärzt: Hotspot/WLAN, Seriennummern" in head, str(head))
-    check("Kopfzeile DE warnt vor nicht geschwaerzten Kategorien",
+    check("Header DE warns about categories not redacted",
           any(l.startswith("# ACHTUNG nicht geschwärzt") and "Netzwerkadressen, Standort" in l for l in head), str(head))
-    check("Kopfzeile: Hinweis 'inoffiziell' und Originale",
+    check("Header: 'unofficial' and originals note",
           "Inoffiziell" in head[0] and any("Originaldateien" in l for l in head))
     out3 = os.path.join(tmp, "o_hdr_all")
     os.makedirs(out3)
     r = sv.process_file(fx["debug"], out_dir=out3, enabled=sv.CATEGORIES, full_date=False, lang="de", log=quiet)
     head = [l for l in open(r["outputs"][0], encoding="utf-8").read().split("\n") if l.startswith("# ")]
-    check("alles geschwaerzt: keine ACHTUNG-Zeile", not any("ACHTUNG" in l for l in head), str(head))
+    check("everything redacted: no ACHTUNG line", not any("ACHTUNG" in l for l in head), str(head))
     out2 = os.path.join(tmp, "o_hdr_en")
     os.makedirs(out2)
     r = sv.process_file(fx["debug"], out_dir=out2, enabled=(), full_date=False, lang="en", log=quiet)
     head = [l for l in open(r["outputs"][0], encoding="utf-8").read().split("\n") if l.startswith("# ")]
-    check("Kopfzeile EN 'Redacted: nothing'", "# Redacted: nothing" in head, str(head))
-    check("Kopfzeile EN warnt (WARNING not redacted)", any(l.startswith("# WARNING not redacted") for l in head), str(head))
+    check("Header EN 'Redacted: nothing'", "# Redacted: nothing" in head, str(head))
+    check("Header EN warns (WARNING not redacted)", any(l.startswith("# WARNING not redacted") for l in head), str(head))
 
 
 def t_guide_location_kept(fx, tmp):
-    print("\n[8] GuideLog-Standort bleibt (Entscheidung: ~10 km reicht)")
+    print("\n[8] GuideLog location kept (decision: ~10 km is acceptable)")
     out = os.path.join(tmp, "o_gloc")
     os.makedirs(out)
     r = sv.process_file(fx["guide"], out_dir=out, enabled=sv.CATEGORIES, log=quiet)
     got = body(r["outputs"][0])
-    check("GuideLog mit allen Kategorien == Klartext", got == fx["guide_lines"])
+    check("GuideLog with all categories == plain text", got == fx["guide_lines"])
 
 
 def t_date(fx, tmp):
-    print("\n[9] Volles Datum im DebugLog")
+    print("\n[9] Full date in the DebugLog")
     r, txt = _debug_out(fx, tmp, "o_date", (), full_date=True)
     lines = txt.split("\n")
-    check("Zeilen vor Mitternacht mit 2026-01-15",
+    check("lines before midnight dated 2026-01-15",
           "[2026-01-15 23:59:59.900] [CoreServer] tick before midnight" in lines)
-    check("Zeilen nach Mitternacht mit 2026-01-16",
+    check("lines after midnight dated 2026-01-16",
           "[2026-01-16 00:00:00.100] [CoreServer] tick after midnight" in lines)
-    check("Zeilen ohne Zeitstempel unveraendert", "Config: /main/status/serialnumber" in lines)
+    check("lines without timestamp unchanged", "Config: /main/status/serialnumber" in lines)
     _, txt2 = _debug_out(fx, tmp, "o_nodate", (), full_date=False)
-    check("--no-full-date: Originalformat", "[23:59:59.900] [CoreServer] tick before midnight" in txt2)
+    check("--no-full-date: original format", "[23:59:59.900] [CoreServer] tick before midnight" in txt2)
     out = os.path.join(tmp, "o_noname")
     os.makedirs(out)
     msgs = []
     r = sv.process_file(fx["debug_nodate"], out_dir=out, enabled=(), full_date=True, log=msgs.append)
-    check("kein Datum im Dateinamen: Warnung", "no_date" in r["warnings"])
-    check("kein Datum im Dateinamen: keine Datums-Praefixe",
+    check("no date in the file name: warning", "no_date" in r["warnings"])
+    check("no date in the file name: no date prefixes",
           "[20:15:00.100]" in "\n".join(body(r["outputs"][0])))
     d = sv.DebugDater((2026, 1, 15))
-    seq = ["[23:00:00.000] a", "[22:59:00.000] b (kleiner Ruecksprung)", "[00:00:01.000] c"]
+    seq = ["[23:00:00.000] a", "[22:59:00.000] b (small backward jump)", "[00:00:01.000] c"]
     out = [d.feed(x) for x in seq]
-    check("kleiner Ruecksprung zaehlt nicht als neuer Tag", out[1].startswith("[2026-01-15 22:59"))
-    check("Ruecksprung > 12 h = neuer Tag", out[2].startswith("[2026-01-16 00:00"))
+    check("small backward jump does not count as a new day", out[1].startswith("[2026-01-15 22:59"))
+    check("backward jump > 12 h = new day", out[2].startswith("[2026-01-16 00:00"))
 
 
 def t_phd2(fx, tmp):
-    print("\n[10] PHD2-Umwandlung")
+    print("\n[10] PHD2 conversion")
     out = os.path.join(tmp, "o_phd2")
     os.makedirs(out)
     r = sv.process_file(fx["guide"], out_dir=out, enabled=sv.CATEGORIES, log=quiet)
     phd = [p for p in r["outputs"] if p.endswith("_phd2.txt")]
-    check("PHD2-Datei erzeugt", len(phd) == 1)
+    check("PHD2 file written", len(phd) == 1)
     lines = body(phd[0])
     exp = fx["guide_stats"]
-    check("Statistik Sessions/Schritte/Ausfaelle korrekt",
+    check("statistics sessions/steps/drops correct",
           r["guide"] == exp, "%s vs %s" % (r["guide"], exp))
-    check("erste Zeile: PHD2-Versionszeile",
+    check("first line: PHD2 version line",
           lines[0] == "PHD2 version StellaVita-2.0.37, Log version 2.5. Log enabled at 2026-01-15 20:15:00", lines[0])
     sessions, cals, errors = phdlogview_parse(lines)
-    check("phdlogview-Parser: keine Fehler", not errors, str(errors[:3]))
-    check("phdlogview-Parser: 1 Kalibrierung, 2 Sessions", len(cals) == 1 and len(sessions) == 2,
+    check("phdlogview parser: no errors", not errors, str(errors[:3]))
+    check("phdlogview parser: 1 calibration, 2 sessions", len(cals) == 1 and len(sessions) == 2,
           "%d/%d" % (len(cals), len(sessions)))
     n_entries = sum(len(s["entries"]) for s in sessions)
-    check("phdlogview-Parser: alle Schritte+Ausfaelle als Eintraege",
+    check("phdlogview parser: all steps + drops as entries",
           n_entries == exp["steps"] + exp["drops"], "%d" % n_entries)
     drops = [e for s in sessions for e in s["entries"] if e[3] == '"DROP"']
-    check("Ausfaelle mit Fehlercode != 0", len(drops) == exp["drops"] and all(e[2] != 0 for e in drops))
+    check("drops with error code != 0", len(drops) == exp["drops"] and all(e[2] != 0 for e in drops))
     txt = "\n".join(lines)
     for code, desc in ((7, "Star lost - mass changed"), (2, "Star lost - low SNR / not found"),
                        (8, "Star lost - moved too far"), (4, "Star lost - too near edge")):
-        check("Ausfall-Text fuer StarErr %d" % code, ',%d,"%s"' % (code, desc) in txt)
+        check("drop description for StarErr %d" % code, ',%d,"%s"' % (code, desc) in txt)
     mono = all(all(b[1] > a[1] for a, b in zip(s["entries"], s["entries"][1:])) for s in sessions)
-    check("Zeitachse je Session streng steigend (auch mit geschaetzten Ausfallzeiten)", mono)
-    check("Kalibrierrichtungen W/E/Backlash/N/S erkannt",
+    check("time axis strictly increasing per session (incl. estimated drop times)", mono)
+    check("calibration directions W/E/Backlash/N/S recognised",
           cals[0]["entries"] == ["West", "West", "East", "Backlash", "North", "South"], str(cals[0]["entries"]))
-    check("NudgeSouth als Kopftext (wie phdlogview es behandelt)",
+    check("NudgeSouth as header text (as phdlogview treats it)",
           any(h.startswith("NudgeSouth,") for h in cals[0]["hdr"]))
     infos = [i for s in sessions for i in s["infos"]]
-    check("INFO-Zeilen erhalten (Settling/Dither/Lock)",
+    check("INFO lines kept (settling/dither/lock)",
           any("DITHER by" in i for i in infos) and any("SET LOCK POSITION" in i for i in infos)
           and any("Settling complete" in i for i in infos))
-    check("einzelnes 'Guiding Ends' vor der Kalibrierung nicht uebernommen",
+    check("stray 'Guiding Ends' before calibration dropped",
           txt.count("Guiding Ends at") == 2)
-    check("Session ueber Mitternacht: Startzeit korrekt",
+    check("session across midnight: start time correct",
           sessions[1]["start"] == "2026-01-15 23:59:30")
     out2 = os.path.join(tmp, "o_nophd2")
     os.makedirs(out2)
     r = sv.process_file(fx["guide"], out_dir=out2, make_phd2=False, log=quiet)
-    check("--no-phd2: keine PHD2-Datei", not any(p.endswith("_phd2.txt") for p in r["outputs"]))
+    check("--no-phd2: no PHD2 file", not any(p.endswith("_phd2.txt") for p in r["outputs"]))
 
 
 def t_files(fx, tmp):
-    print("\n[11] Dateien")
+    print("\n[11] Files")
     before = {k: sha(fx[k]) for k in ("guide", "debug", "glog")}
     out = os.path.join(tmp, "o_files")
     os.makedirs(out)
     r = sv.process_file(fx["guide"], out_dir=out, log=quiet)
     names = sorted(os.path.basename(p) for p in r["outputs"])
-    check("Namen: _decoded.txt und _phd2.txt",
+    check("names: _decoded.txt and _phd2.txt",
           names == ["GuideLog_2026-01-15_201500_decoded.txt", "GuideLog_2026-01-15_201500_phd2.txt"], str(names))
-    check("Ausgabeordner wird verwendet", all(os.path.dirname(p) == out for p in r["outputs"]))
+    check("output folder is used", all(os.path.dirname(p) == out for p in r["outputs"]))
     p0 = r["outputs"][0]
     m0, s0 = os.path.getmtime(p0), sha(p0)
     msgs = []
     r2 = sv.process_file(fx["guide"], out_dir=out, enabled=(), log=msgs.append)
-    check("ohne --force nichts ueberschrieben", sha(p0) == s0 and not r2["outputs"])
-    check("Meldung beim Ueberspringen", any("force" in m for m in msgs))
+    check("without --force nothing is overwritten", sha(p0) == s0 and not r2["outputs"])
+    check("message when skipping", any("force" in m for m in msgs))
     r3 = sv.process_file(fx["guide"], out_dir=out, enabled=(), force=True, log=quiet)
-    check("mit --force ueberschrieben", sha(p0) != s0)
+    check("with --force overwritten", sha(p0) != s0)
     rg = sv.process_file(fx["glog"], out_dir=out, log=quiet)
     check(".glog -> _redacted.glog", [os.path.basename(p) for p in rg["outputs"]] == ["libtoupcam_latest_redacted.glog"])
-    check(".glog: Inhalt bleibt (nichts zu schwaerzen)", body(rg["outputs"][0]) == GLOG_PLAIN)
-    check(".glog: Kopfzeile mit Schwaerz-Kennzeichnung",
+    check(".glog: content kept (nothing to redact)", body(rg["outputs"][0]) == GLOG_PLAIN)
+    check(".glog: header with redaction note",
           open(rg["outputs"][0], encoding="utf-8").readline().startswith("# "))
     for o in r["outputs"]:
-        check("Kopfzeile in %s" % os.path.basename(o), open(o, encoding="utf-8").readline().startswith("# "))
+        check("header in %s" % os.path.basename(o), open(o, encoding="utf-8").readline().startswith("# "))
     after = {k: sha(fx[k]) for k in ("guide", "debug", "glog")}
-    check("Originale unveraendert", before == after)
+    check("originals unchanged", before == after)
     # folder gathering
     files = sv.gather([fx["dir"]], recursive=False)
     base = sorted(os.path.basename(f) for f in files)
-    check("Ordner: eigene Ausgaben und .fits werden ausgelassen",
+    check("folder: own outputs and .fits are skipped",
           not any(b.endswith(("_decoded.txt", "_phd2.txt")) for b in base) and "image.fits" not in base, str(base))
-    check("Ordner ohne -r: Unterordner nicht", not any("sub" in f for f in files))
+    check("folder without -r: no subfolders", not any("sub" in f for f in files))
     files_r = sv.gather([fx["dir"]], recursive=True)
-    check("Ordner mit -r: Unterordner dabei", any(os.sep + "sub" + os.sep in f for f in files_r))
+    check("folder with -r: subfolders included", any(os.sep + "sub" + os.sep in f for f in files_r))
     msgs = []
     ru = sv.process_file(fx["unknown"], out_dir=out, log=msgs.append)
-    check("unbekannte Datei: uebersprungen mit Meldung", ru["skipped"] == "unknown" and msgs)
+    check("unknown file: skipped with a message", ru["skipped"] == "unknown" and msgs)
     rp = sv.process_file(fx["guide_plain"], out_dir=out, log=quiet)
-    check("schon dekodiertes GuideLog: verarbeitet ohne erneutes Dekodieren",
+    check("already decoded GuideLog: processed without decoding again",
           body(rp["outputs"][0]) == fx["guide_lines"])
     # re-feeding our own output as plain input must strip the old header
     own = os.path.join(tmp, "own_copy.txt")
@@ -674,78 +674,79 @@ def t_files(fx, tmp):
     ro = sv.process_file(own, out_dir=out3, enabled=(), log=quiet)
     hdr = [l for l in open(ro["outputs"][0], encoding="utf-8") if l.startswith("# ")]
     ref_hdr = [l for l in sv._redaction_header((), "en").split("\n") if l]
-    check("eigene Ausgabe als Eingabe: alte Kopfzeilen nicht verdoppelt",
+    check("own output as input: old header not duplicated",
           len(hdr) == len(ref_hdr), "%d vs %d" % (len(hdr), len(ref_hdr)))
 
 
 def t_report(fx, tmp):
-    print("\n[12] Probelauf")
+    print("\n[12] Dry run")
     out = os.path.join(tmp, "o_rep")
     os.makedirs(out)
     msgs = []
     r = sv.process_file(fx["debug"], out_dir=out, report=True, full_date=False, log=msgs.append)
-    check("Probelauf schreibt nichts", os.listdir(out) == [])
-    check("Probelauf meldet Kategorien", any("Hotspot" in m for m in msgs), str(msgs))
+    check("dry run writes nothing", os.listdir(out) == [])
+    check("dry run reports categories", any("Hotspot" in m for m in msgs), str(msgs))
     r2, _ = _debug_out(fx, tmp, "o_rep_real", sv.CATEGORIES)
-    check("Probelauf-Zaehler == echter Lauf", r["redactions"] == r2["redactions"],
+    check("dry run counters == real run", r["redactions"] == r2["redactions"],
           "%s vs %s" % (r["redactions"], r2["redactions"]))
     rg = sv.process_file(fx["guide"], out_dir=out, report=True, log=quiet)
-    check("Probelauf GuideLog schreibt nichts", os.listdir(out) == [])
+    check("dry run GuideLog writes nothing", os.listdir(out) == [])
 
 
 def t_version(fx, tmp):
-    print("\n[13] Versionspruefung")
+    print("\n[13] Version check")
     out = os.path.join(tmp, "o_ver")
     os.makedirs(out)
     r = sv.process_file(fx["guide_v9"], out_dir=out, log=quiet)
-    check("unbekannte Logversion -> Warnung", any(w.startswith("version:9.9.9") for w in r["warnings"]),
+    check("unknown log version -> warning", any(w.startswith("version:9.9.9") for w in r["warnings"]),
           str(r["warnings"]))
     r = sv.process_file(fx["guide"], out_dir=out, force=True, log=quiet)
-    check("bekannte Version -> keine Warnung", not r["warnings"], str(r["warnings"]))
+    check("known version -> no warning", not r["warnings"], str(r["warnings"]))
 
 
 def t_cli(fx, tmp):
-    print("\n[14] Kommandozeile")
+    print("\n[14] Command line")
     py = sys.executable
     p = subprocess.run([py, TOOL, "--help"], capture_output=True, text=True)
     check("--help", p.returncode == 0 and "--no-redact-location" in p.stdout)
-    check("--help: -o legt den Ordner bei Bedarf an", "created if missing" in " ".join(p.stdout.split()))
+    check("--help: license notice", "GPL-3.0-or-later" in p.stdout and "NO WARRANTY" in p.stdout)
+    check("--help: -o creates the folder if missing", "created if missing" in " ".join(p.stdout.split()))
     out = os.path.join(tmp, "o_cli")
     nested = os.path.join(tmp, "o_cli_new", "a", "b")
     p = subprocess.run([py, TOOL, fx["glog"], "-o", nested], capture_output=True, text=True)
-    check("-o: nicht vorhandener (verschachtelter) Ordner wird angelegt",
+    check("-o: missing (nested) folder is created",
           p.returncode == 0 and os.listdir(nested) == ["libtoupcam_latest_redacted.glog"],
           (p.stderr or p.stdout)[-300:])
     nested_rep = os.path.join(tmp, "o_cli_rep_new", "a")
     subprocess.run([py, TOOL, fx["glog"], "-o", nested_rep, "--report"], capture_output=True, text=True)
-    check("-o mit --report: Ordner wird nicht angelegt", not os.path.exists(os.path.dirname(nested_rep)))
+    check("-o with --report: folder is not created", not os.path.exists(os.path.dirname(nested_rep)))
     p = subprocess.run([py, TOOL, fx["dir"], "-o", out, "--lang", "de"], capture_output=True, text=True)
-    check("Ordnerlauf Exitcode 0", p.returncode == 0, p.stderr[-300:])
-    check("deutsche Meldungen", "Fertig:" in p.stdout, p.stdout[:200])
+    check("folder run exit code 0", p.returncode == 0, p.stderr[-300:])
+    check("German messages", "Fertig:" in p.stdout, p.stdout[:200])
     made = sorted(os.listdir(out))
-    check("alle Ausgaben erzeugt",
+    check("all outputs written",
           {"GuideLog_2026-01-15_201500_decoded.txt", "GuideLog_2026-01-15_201500_phd2.txt",
            "DebugLog_2026-01-15_201500_decoded.txt", "libtoupcam_latest_redacted.glog"} <= set(made), str(made))
-    check("unbekannte Datei gemeldet", "notes.txt" in p.stdout)
+    check("unknown file reported", "notes.txt" in p.stdout)
     p = subprocess.run([py, TOOL, fx["debug"], "-o", out, "--lang", "en", "--force",
                         "--no-redact-network"], capture_output=True, text=True)
     txt = open(os.path.join(out, "DebugLog_2026-01-15_201500_decoded.txt"), encoding="utf-8").read()
-    check("--no-redact-network wirkt", FAKE["ip_dev"] in txt and FAKE["ssid_long"] not in txt)
-    check("englische Meldungen", "Done:" in p.stdout, p.stdout[:200])
-    check("Einzahl bei einer Datei ('1 file')", "(1 file," in p.stdout, p.stdout[-80:])
+    check("--no-redact-network works", FAKE["ip_dev"] in txt and FAKE["ssid_long"] not in txt)
+    check("English messages", "Done:" in p.stdout, p.stdout[:200])
+    check("singular for one file ('1 file')", "(1 file," in p.stdout, p.stdout[-80:])
     p = subprocess.run([py, TOOL, fx["glog"], "-o", os.path.join(tmp, "o_cli_nr"), "--lang", "de", "--no-redact"],
                        capture_output=True, text=True)
-    check("--no-redact: Warnung beim Lauf", "ACHTUNG: nicht geschwärzt" in p.stdout, p.stdout[:200])
+    check("--no-redact: warning during the run", "ACHTUNG: nicht geschwärzt" in p.stdout, p.stdout[:200])
     p = subprocess.run([py, TOOL, fx["glog"], "-o", os.path.join(tmp, "o_cli_all"), "--lang", "de"],
                        capture_output=True, text=True)
-    check("Standardlauf: keine Warnung", "ACHTUNG" not in p.stdout, p.stdout[:200])
+    check("default run: no warning", "ACHTUNG" not in p.stdout, p.stdout[:200])
     out2 = os.path.join(tmp, "o_cli_rep")
     p = subprocess.run([py, TOOL, fx["debug"], "-o", out2, "--report"], capture_output=True, text=True)
-    check("--report schreibt nichts", not os.path.exists(out2) or os.listdir(out2) == [])
+    check("--report writes nothing", not os.path.exists(out2) or os.listdir(out2) == [])
 
 
 def t_progress_i18n(fx, tmp):
-    print("\n[14b] Fortschritt und Meldungen in beiden Sprachen")
+    print("\n[14b] Progress and messages in both languages")
     for lang, word in (("de", "Zeilen"), ("en", "lines")):
         buf = io.StringIO()
         old = sys.stderr
@@ -754,16 +755,16 @@ def t_progress_i18n(fx, tmp):
             sv.make_progress(lang)(50, 100, 1234)
         finally:
             sys.stderr = old
-        check("Fortschrittszeile %s: '%s'" % (lang.upper(), word), ("1234 " + word) in buf.getvalue(), buf.getvalue())
+        check("progress line %s: '%s'" % (lang.upper(), word), ("1234 " + word) in buf.getvalue(), buf.getvalue())
     empty = os.path.join(tmp, "empty_dir")
     os.makedirs(empty)
     p = subprocess.run([sys.executable, TOOL, empty, "--lang", "de"], capture_output=True, text=True)
-    check("leerer Ordner: deutsche Meldung", "Keine Logdateien gefunden." in p.stdout and p.returncode == 1,
+    check("empty folder: German message", "Keine Logdateien gefunden." in p.stdout and p.returncode == 1,
           p.stdout[:200])
 
 
 def t_menu(fx, tmp):
-    print("\n[15] Textmenue (Fallback ohne tkinter)")
+    print("\n[15] Text menu (fallback without tkinter)")
     env = dict(os.environ, LANG="en_US.UTF-8")
     # make tkinter unimportable for this run
     stub = os.path.join(tmp, "notk")
@@ -777,12 +778,14 @@ def t_menu(fx, tmp):
     feed = work + "\n" + "n\n" + "\n" + "\n"           # folder, no recurse, redact all, PHD2 yes
     p = subprocess.run([sys.executable, TOOL], input=feed, capture_output=True, text=True, env=env)
     made = sorted(os.listdir(work))
-    check("Menue laeuft ohne tkinter", p.returncode == 0, p.stderr[-300:])
-    check("Menue erzeugt Ausgaben", any(m.endswith("_phd2.txt") for m in made), str(made))
-    check("Menue: Grund fuer fehlendes Fenster wird angezeigt (Python-Pfad + Fehler)",
+    check("menu runs without tkinter", p.returncode == 0, p.stderr[-300:])
+    check("menu writes outputs", any(m.endswith("_phd2.txt") for m in made), str(made))
+    check("menu: reason for missing window shown (Python path + error)",
           "No window: tkinter missing in" in p.stdout and sys.executable in p.stdout, p.stdout[:300])
-    check("Menue: klare Eingabeaufforderung fuer Kategorien", "Selection (e.g. 3 or 2,3)" in p.stdout, p.stdout[-300:])
-    check("Menue: Schlusszeile mit Dateianzahl und Dauer", re.search(r"\(1 file, [\d.]+s\)", p.stdout) is not None,
+    check("menu: GPL notice at start (EN)",
+          "ABSOLUTELY NO WARRANTY" in p.stdout and sv.COPYRIGHT in p.stdout, p.stdout[:300])
+    check("menu: clear prompt for categories", "Selection (e.g. 3 or 2,3)" in p.stdout, p.stdout[-300:])
+    check("menu: final line with file count and duration", re.search(r"\(1 file, [\d.]+s\)", p.stdout) is not None,
           p.stdout[-200:])
     # tkinter installed but no display (SSH / console): must fall back to the menu
     try:
@@ -791,7 +794,7 @@ def t_menu(fx, tmp):
     except Exception:
         have_tk = False
     if not have_tk:
-        skip("tkinter ohne Bildschirm -> Menue", "tkinter in diesem Python nicht installiert")
+        skip("tkinter without display -> menu", "tkinter not installed in this Python")
     else:
         env2 = dict(os.environ, LANG="de_AT.UTF-8")
         env2.pop("DISPLAY", None)
@@ -800,22 +803,24 @@ def t_menu(fx, tmp):
         shutil.copy(fx["glog"], work2)
         p = subprocess.run([sys.executable, TOOL], input=work2 + "\nn\n\n\n", capture_output=True,
                            text=True, env=env2)
-        check("tkinter ohne Bildschirm: Grund angezeigt", "kein Bildschirm" in p.stdout, p.stdout[:300])
-        check("tkinter ohne Bildschirm: kein Absturz, Menue statt Fenster",
+        check("tkinter without display: GPL notice at start (DE)",
+              "OHNE JEDE GEWÄHRLEISTUNG" in p.stdout, p.stdout[:300])
+        check("tkinter without display: reason shown", "kein Bildschirm" in p.stdout, p.stdout[:300])
+        check("tkinter without display: no crash, menu instead of window",
               p.returncode == 0 and "Datei oder Ordner" in p.stdout, (p.stderr or p.stdout)[-300:])
-        check("tkinter ohne Bildschirm: Ausgabe erzeugt",
+        check("tkinter without display: output written",
               any(m.endswith("_redacted.glog") for m in os.listdir(work2)), str(os.listdir(work2)))
 
 
 def t_gui(fx, tmp):
-    print("\n[16] Fenster (tkinter)")
+    print("\n[16] Window (tkinter)")
     try:
         import tkinter  # noqa
     except Exception:
-        skip("Fenster-Tests", "tkinter in diesem Python nicht installiert")
+        skip("window tests", "tkinter not installed in this Python")
         return
     if not shutil.which("Xvfb"):
-        skip("Fenster-Tests", "Xvfb nicht vorhanden")
+        skip("window tests", "Xvfb not available")
         return
     disp = ":97"
     xv = subprocess.Popen(["Xvfb", disp, "-screen", "0", "1024x768x24"],
@@ -825,14 +830,14 @@ def t_gui(fx, tmp):
         time.sleep(1)
         env = dict(os.environ, DISPLAY=disp, SV_GUI_AUTOCLOSE="1500")
         p = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, env=env, timeout=60)
-        check("Fenster startet und schliesst sauber", p.returncode == 0, p.stderr[-300:])
+        check("window starts and closes cleanly", p.returncode == 0, p.stderr[-300:])
         work = os.path.join(tmp, "gui_in")
         os.makedirs(work)
         shutil.copy(fx["guide"], work)
         env = dict(env, SV_GUI_AUTORUN=work, SV_GUI_AUTOCLOSE="6000")
         p = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, env=env, timeout=60)
         made = sorted(os.listdir(work))
-        check("Fenster-Lauf erzeugt Ausgaben", any(m.endswith("_phd2.txt") for m in made), str(made) + p.stderr[-200:])
+        check("window run writes outputs", any(m.endswith("_phd2.txt") for m in made), str(made) + p.stderr[-200:])
         _gui_layout_and_outdir(fx, tmp, env)
     finally:
         xv.terminate()
@@ -874,6 +879,7 @@ for scale in (1.3333, 1.6667, 2.0):
 root = tk.Tk()
 g = sv.build_gui(root, lang)
 root.update()
+res["start_text"] = g.text.get("1.0", "end").strip()
 # dry run with an output folder must not create it
 g.sel.set(src); g.out.set(out_new)
 g.go(report=True); root.update()
@@ -905,23 +911,26 @@ def _gui_layout_and_outdir(fx, tmp, env):
     try:
         r = json.loads(p.stdout.strip().splitlines()[-1])
     except Exception:
-        check("Fenster-Probe laeuft", False, (p.stderr or p.stdout)[-400:])
+        check("window probe runs", False, (p.stderr or p.stdout)[-400:])
         return
     for scale, label in (("1.3333", "1.0x"), ("1.6667", "1.25x"), ("2.0", "1.5x")):
-        for name, what in (("default", "Startgroesse"), ("min", "Mindestgroesse"),
-                           ("tiny", "200x120 angefordert")):
+        for name, what in (("default", "start size"), ("min", "minimum size"),
+                           ("tiny", "200x120 requested")):
             k = "%s@%s" % (name, scale)
-            check("Skalierung %s, %s: alle Bedienelemente sichtbar (inkl. Probelauf/Start)"
+            check("scaling %s, %s: all controls visible (incl. Dry run/Run)"
                   % (label, what), r[k]["widgets"], str(r[k]))
-            check("Skalierung %s, %s: Quelle- und Zielordner-Feld gleich ausgerichtet"
+            check("scaling %s, %s: source and output folder fields aligned"
                   % (label, what), r[k]["entries"][0] == r[k]["entries"][1], str(r[k]["entries"]))
-    check("Zielordner: Probelauf legt ihn nicht an", r["dry_created"] is False)
-    check("Zielordner: wird angelegt und enthaelt die Ausgaben",
+    check("window: GPL notice shown at start (DE)",
+          r["start_text"].startswith("StellaVita Log Tool v%s - Copyright" % sv.TOOL_VERSION)
+          and "OHNE JEDE GEWÄHRLEISTUNG" in r["start_text"], r["start_text"][:200])
+    check("output folder: dry run does not create it", r["dry_created"] is False)
+    check("output folder: created and contains the outputs",
           r["out_files"] == ["GuideLog_2026-01-15_201500_decoded.txt",
                              "GuideLog_2026-01-15_201500_phd2.txt"], str(r["out_files"]))
-    check("Zielordner: nichts neben der Eingabe geschrieben",
+    check("output folder: nothing written next to the input",
           r["src_files"] == [os.path.basename(src)], str(r["src_files"]))
-    check("Zielordner ist eine Datei: Meldung, kein Lauf",
+    check("output folder is a file: message, no run",
           r["file_msg"].startswith("Zielordner ist eine Datei:"), r["file_msg"][:200])
 
 
@@ -981,7 +990,7 @@ def main():
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     failed = [r for r in RESULTS if not r[1]]
-    print("\n%d Tests, %d bestanden, %d fehlgeschlagen, %d uebersprungen"
+    print("\n%d tests, %d passed, %d failed, %d skipped"
           % (len(RESULTS), len(RESULTS) - len(failed), len(failed), len(SKIPPED)))
     for n, why in SKIPPED:
         print("  SKIP:", n, "--", why)
