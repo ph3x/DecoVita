@@ -1,0 +1,1193 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+StellaVita Log Tool  -  decode, redact and convert ToupTek StellaVita logs.
+
+This is an unofficial community tool. It has no connection to ToupTek Astro.
+
+What it does
+  * decodes the obfuscated GuideLog_*.txt / DebugLog_*.txt files into readable text
+  * optionally redacts personal data (Wi-Fi names/passwords, IP addresses,
+    location, serial numbers) - on by default, each category switchable
+  * for GuideLogs it also writes a PHD2-format file that phdlogview can open
+  * reads cleartext libtoupcam *.glog files (redact only)
+
+The decoding scheme was worked out from the files themselves, not from any
+documentation.  Per line, only the printable characters 33..126 are used:
+  t_j = (t0 + j) mod 95         (j = position in the line, t0 random per line)
+  a_j = t_j - 1 if t_j > 32 else t_j
+  plain = 33 + (cipher - 33 - a_j) mod 94      (126 -> space)
+Space and '~' collide (95 plaintext symbols mapped onto 94); '~' is rare in
+these logs and decodes to a space.
+
+Usage:  python3 stellavita.py [options] [file-or-folder ...]
+Run without arguments for a window (or a text menu if tkinter is missing).
+No third-party packages are required - pure standard library.
+"""
+
+import os
+import re
+import sys
+import time
+import math
+import argparse
+
+# ----------------------------------------------------------------------------
+#  Version / known-good markers
+# ----------------------------------------------------------------------------
+
+TOOL_VERSION = "1.0.1"
+KNOWN_APP_VERSIONS = ("2.0.37",)      # GuideLog "Version:" values seen so far
+KNOWN_PROTOCOL = ("2",)               # GuideLog "Version protocol:" values
+
+OUT_SUFFIXES = ("_decoded", "_phd2", "_redacted")
+
+# ----------------------------------------------------------------------------
+#  Cipher core
+# ----------------------------------------------------------------------------
+
+def _build_tables():
+    """95 translation tables (one per effective key t), 256 bytes each."""
+    tabs = []
+    for t in range(95):
+        a = t - 1 if t > 32 else t
+        tab = bytearray(range(256))          # identity for bytes outside 33..126
+        for c in range(33, 127):
+            p = 33 + (c - 33 - a) % 94
+            tab[c] = 32 if p == 126 else p
+        tabs.append(bytes(tab))
+    return tabs
+
+_TAB = _build_tables()
+_POS_CACHE = {}          # t0 -> list of tables, extended on demand
+from operator import getitem as _getitem
+
+
+def _pos(t0, n):
+    lst = _POS_CACHE.get(t0)
+    if lst is None:
+        lst = []
+        _POS_CACHE[t0] = lst
+    if len(lst) < n:
+        base = len(lst)
+        for j in range(base, n):
+            lst.append(_TAB[(t0 + j) % 95])
+    return lst
+
+
+def decode_line(raw, t0):
+    """Decode one raw (bytes) line with line key t0 -> str."""
+    if not raw:
+        return ""
+    pos = _pos(t0, len(raw))
+    return bytes(map(_getitem, pos, raw)).decode("latin1")
+
+
+def encode_line(text, t0):
+    """Inverse of decode_line.  text (str) -> raw (bytes).  For test vectors.
+
+    '~' in the plaintext is encoded like a space (the known collision) and will
+    come back as a space when decoded.
+    """
+    out = bytearray(len(text))
+    for j, ch in enumerate(text):
+        pch = ord(ch)
+        t = (t0 + j) % 95
+        a = t - 1 if t > 32 else t
+        if pch == 32 or pch == 126:          # space or '~'  -> raw symbol 126
+            praw = 126
+        elif 33 <= pch <= 125:
+            praw = pch
+        else:                                # non-printable: leave untouched
+            out[j] = pch & 0xFF
+            continue
+        out[j] = 33 + (praw - 33 + a) % 94
+    return bytes(out)
+
+
+TS = re.compile(r'(\[\d\d:\d\d:\d\d\.\d{3}\]|\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)')
+
+
+def t0_candidates(c0, first):
+    s = (c0 - first) % 94
+    if s < 32:
+        return (s,)
+    if s == 32:
+        return (32, 33)
+    return (s + 1,)
+
+
+def try_known(raw):
+    """Fast path: recover a timestamped line from its known first character."""
+    if not raw:
+        return ""
+    c0 = raw[0]
+    for f in (0x5B, 0x32):               # '[' (DebugLog) or '2' (date lines)
+        for t0 in t0_candidates(c0, f):
+            d = decode_line(raw, t0)
+            if TS.match(d):
+                return d
+    return None
+
+
+# ---- fallback brute-force scoring (lines without a timestamp anchor) --------
+
+_WORD = re.compile(r'[A-Za-z]{2,}')
+_COMMON = frozenset(
+    'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 ,.:-=%/"{}[]()'
+)
+_SEED = (
+    "Log begin at Platform RaspberryPi Version protocol Guiding Begins Ends "
+    "Calibration Step Direction West East North South Backlash NudgeSouth complete "
+    "Dither both axes scale Image noise reduction none Pixel arc-sec per px Binning "
+    "Focal length mm Search region Star mass tolerance Multi-star mode list size "
+    "Camera full size pixel um Exposure Mount connected guiding enabled xAngle xRate "
+    "yAngle yRate parity Norm rates dec X guide algorithm Hysteresis Y Resist Switch "
+    "Backlash comp disabled pulse Max RA duration DEC mode auto Guide Speed Cal Lock "
+    "position Star HFD Frame Time mount dx dy RARawDistance DECRawDistance RAGuide "
+    "DECGuide RADuration RADirection DECDuration DECDirection XStep YStep StarMass "
+    "SNR ErrorCode INFO SETTLING STATE CHANGE Settling started complete failed SET "
+    "LOCK POSITION new lock pos DITHER by CoreServer ScopeINDI received Property "
+    "Number Switch Text name label value min max step Altitude Azimuth Latitude "
+    "Longitude Local Sidereal Time event_type frame_number offset guide camera "
+    "focuser exposure gain filter wheel meridian flip mosaic autofocus gphoto "
+    "serial number copyright artist owner ssid password gateway subnet mask "
+    "\nConfig: /main/settings/iso\n  Label      : ISO Speed\n  Readonly   : 0\n"
+    "  Type       : RADIO\n  Current    : 100\n  Choices    : Auto, 100, 200, 400\n"
+    "  Printable  : 0\n  Info       : \n11111111000000000000 0101 1000 2026-10-03 19:26:29 "
+)
+
+_TRAIN_LINES = 20000      # anchored lines of the same file used for training
+
+
+def _build_model(texts):
+    import collections
+    c = collections.Counter()
+    vocab = set()
+    for t in texts:
+        for a, b in zip(t, t[1:]):
+            c[a + b] += 1
+        vocab.update(w.lower() for w in _WORD.findall(t))
+    tot = sum(c.values()) or 1
+    model = {k: math.log(v / tot) for k, v in c.items()}
+    floor = math.log(0.5 / tot)
+    return model, floor, vocab
+
+
+_MODEL = _build_model([_SEED])
+
+
+def train_model(path):
+    """Seed + bigrams from the first anchored (timestamped) lines of this file.
+    Reads at most _TRAIN_LINES lines; the file is still processed line by line."""
+    sample = []
+    with open(path, "rb") as f:
+        for i, ln in enumerate(f):
+            if i >= _TRAIN_LINES:
+                break
+            d = try_known(ln.rstrip(b"\r\n"))
+            if d:
+                sample.append(d)
+    return _build_model(sample + [_SEED])
+
+
+def _score(d, mdl=None):
+    model, floor, vocab = mdl or _MODEL
+    bigram = 0.0
+    for i in range(len(d) - 1):
+        bigram += model.get(d[i:i + 2], floor)
+    common = 0
+    for ch in d:
+        if ch in _COMMON:
+            common += 1
+    known = 0
+    for w in _WORD.findall(d):
+        if w.lower() in vocab:
+            known += len(w)
+    return bigram + 5 * common + 10 * known
+
+
+UNCERTAIN_MARGIN = 25.0     # score gap below which a guessed line counts as uncertain
+
+
+def recover(raw, mdl=None):
+    """Decode one line -> (text, anchored, margin).
+    anchored=True: key derived from the known first character (certain).
+    anchored=False: key guessed by scoring; margin = gap to the runner-up."""
+    if not raw:
+        return "", True, 0.0
+    d = try_known(raw)
+    if d is not None:
+        return d, True, 0.0
+    best = None
+    best_s = second = None
+    for t0 in range(95):
+        d = decode_line(raw, t0)
+        s = _score(d, mdl)
+        if best_s is None or s > best_s:
+            second, best_s, best = best_s, s, d
+        elif second is None or s > second:
+            second = s
+    margin = (best_s - second) if second is not None else 0.0
+    return best, False, margin
+
+
+# ----------------------------------------------------------------------------
+#  File-type detection
+# ----------------------------------------------------------------------------
+
+_MK_GUIDE = ("Guiding Begins", "Calibration Step->", "Frame,Time,mount",
+             "Log begin at", "Guiding Step->")
+_MK_DEBUG = ("CoreServer", "ScopeINDI", "-> Number (", "received Property")
+_MK_GLOG = ("libtoupcam", "EnumLibusb", "sdk: lib")
+
+
+def sniff(path, sample_lines=400):
+    """Return (kind, already_plain).  kind in guide/debug/glog/unknown."""
+    raw = []
+    with open(path, "rb") as f:
+        for i, ln in enumerate(f):
+            raw.append(ln.rstrip(b"\r\n"))
+            if i + 1 >= sample_lines:
+                break
+    text_raw = b"\n".join(raw).decode("latin1", "replace")
+    if "libtoupcam" in text_raw or "EnumLibusb" in text_raw:
+        return "glog", True
+    if any(m in text_raw for m in _MK_DEBUG):
+        return "debug", True
+    if any(m in text_raw for m in _MK_GUIDE):
+        return "guide", True
+    # otherwise try to decode the sample
+    dec = "\n".join(recover(l)[0] for l in raw[:120] if l)
+    if "libtoupcam" in dec:
+        return "glog", False
+    if any(m in dec for m in _MK_DEBUG):
+        return "debug", False
+    if any(m in dec for m in _MK_GUIDE):
+        return "guide", False
+    return "unknown", None
+
+
+# ----------------------------------------------------------------------------
+#  DebugLog date handling
+# ----------------------------------------------------------------------------
+
+_DATE_IN_NAME = re.compile(r'(\d{4})[-_](\d{2})[-_](\d{2})')
+_TS_DEBUG = re.compile(r'^\[(\d\d):(\d\d):(\d\d)\.(\d{3})\]')
+
+
+def date_from_name(path):
+    m = _DATE_IN_NAME.search(os.path.basename(path))
+    if not m:
+        return None
+    return tuple(int(x) for x in m.groups())      # (Y, M, D)
+
+
+class DebugDater:
+    """Prefixes DebugLog timestamps with a full date, tracking midnight rollover
+    (the StellaVita Pi has no battery clock, so time can jump)."""
+    def __init__(self, start_date):
+        self.y, self.m, self.d = start_date
+        self.prev = None
+
+    def feed(self, line):
+        mt = _TS_DEBUG.match(line)
+        if not mt:
+            return line
+        h, mi, s = int(mt.group(1)), int(mt.group(2)), int(mt.group(3))
+        secs = h * 3600 + mi * 60 + s
+        if self.prev is not None and secs < self.prev - 12 * 3600:
+            self._next_day()
+        self.prev = secs
+        date = "%04d-%02d-%02d " % (self.y, self.m, self.d)
+        return "[" + date + line[1:]
+
+    def _next_day(self):
+        import datetime
+        nd = datetime.date(self.y, self.m, self.d) + datetime.timedelta(days=1)
+        self.y, self.m, self.d = nd.year, nd.month, nd.day
+
+
+# ----------------------------------------------------------------------------
+#  Redaction
+# ----------------------------------------------------------------------------
+
+CATEGORIES = ("hotspot", "network", "location", "serial")
+
+_RE_SSID = re.compile(r'("(?:[a-z0-9_]*ssid)"\s*:\s*")((?:[^"\\]|\\.)*)(")', re.I)
+_RE_PW = re.compile(r'("(?:[a-z0-9_]*(?:password|passwd|psk|pwd))"\s*:\s*")((?:[^"\\]|\\.)*)(")', re.I)
+_RE_IP_PREFIX = re.compile(r'(ipv[46]:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})')
+_RE_IP_JSON = re.compile(r'("(?:[a-z0-9_]*(?:ip|gateway))"\s*:\s*")(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(")', re.I)
+_RE_IP_INFO = re.compile(r'(\bip:\s*)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})', re.I)
+_RE_NUM = re.compile(r'(--> Number#?\d*:\s*name = )([A-Z_0-9]+)(,.*?value = )(-?[\d.]+(?:[eE][-+]?\d+)?)')
+_RE_TXT = re.compile(r'(--> Text#?\d*:\s*name = )(UTC|OFFSET)(,.*?text = )(\S+)')
+_RE_LATLON_JSON = re.compile(r'("(?:latitude|longitude)"\s*:\s*)(-?\d+(?:\.\d+)?)', re.I)
+_RE_SERIAL_JSON = re.compile(r'("(?:[a-z0-9_]*serial[a-z0-9_]*)"\s*:\s*")([^"]*)(")', re.I)
+_RE_SERIAL_JSON_NUM = re.compile(r'("(?:[a-z0-9_]*serial[a-z0-9_]*)"\s*:\s*)(\d+)', re.I)
+_RE_CONFIG = re.compile(r'^Config:\s*(\S+)')
+_RE_CURRENT = re.compile(r'^(\s*(?:Current|Default|Choices)\s*:\s*)(.*)$')
+_RE_FIELD = re.compile(r'^\s*(?:Label|Type|Readonly|Printable|Info|Bottom|Top|Step)\s*:')
+
+_LOC_BLANK = frozenset((
+    "ALT", "AZ", "LST", "ELEV",
+    "SYNCPOLARALIGN_ALT", "SYNCPOLARALIGN_AZ",
+    "STANDARDSYNCPOINT_JD", "STANDARDSYNCPOINT_SYNCTIME",
+    "ALIGNPOINT_JD", "ALIGNPOINT_SYNCTIME",
+    "HORIZONLIMITS_POINT_AZ", "HORIZONLIMITS_POINT_ALT",
+))
+_LOC_ROUND = frozenset(("LAT", "LONG"))
+_SENS_CONFIG = ("serialnumber", "eosserialnumber", "ownername", "artist", "copyright")
+
+REDACTED = "<REDACTED>"
+
+
+def _valid_ip(*octs):
+    return all(0 <= int(o) <= 255 for o in octs)
+
+
+class Redactor:
+    """Streaming, stateful redactor.  feed(line)->line, counters in .counts."""
+    def __init__(self, enabled):
+        self.en = {c: (c in enabled) for c in CATEGORIES}
+        self.counts = {c: 0 for c in CATEGORIES}
+        self.ssid_map = {}          # value -> token
+        self.net_map = {}           # (o1,o2,o3) -> token
+        self._cfg_sensitive = False
+
+    # -- helpers ---------------------------------------------------------
+    def _ssid_token(self, val):
+        tok = self.ssid_map.get(val)
+        if tok is None:
+            tok = "<SSID_%d>" % (len(self.ssid_map) + 1)
+            self.ssid_map[val] = tok
+        return tok
+
+    def _net_token(self, o1, o2, o3):
+        key = (o1, o2, o3)
+        tok = self.net_map.get(key)
+        if tok is None:
+            tok = "N%d" % (len(self.net_map) + 1)
+            self.net_map[key] = tok
+        return tok
+
+    # -- category passes -------------------------------------------------
+    def _do_hotspot(self, line):
+        def ssid(m):
+            self.counts["hotspot"] += 1
+            return m.group(1) + self._ssid_token(m.group(2)) + m.group(3)
+        line = _RE_SSID.sub(ssid, line)
+
+        def pw(m):
+            self.counts["hotspot"] += 1
+            return m.group(1) + REDACTED + m.group(3)
+        line = _RE_PW.sub(pw, line)
+
+        # catch any stray occurrence of a known SSID elsewhere (longest first)
+        if self.ssid_map:
+            line = self._stray_ssids(line)
+        return line
+
+    def _do_network(self, line):
+        def pref(m):
+            if not _valid_ip(m.group(2), m.group(3), m.group(4), m.group(5)):
+                return m.group(0)
+            self.counts["network"] += 1
+            tok = self._net_token(m.group(2), m.group(3), m.group(4))
+            return "%s%s.%s.<%s>.%s" % (m.group(1), m.group(2), m.group(3), tok, m.group(5))
+        line = _RE_IP_PREFIX.sub(pref, line)
+
+        def js(m):
+            if not _valid_ip(m.group(2), m.group(3), m.group(4), m.group(5)):
+                return m.group(0)
+            self.counts["network"] += 1
+            tok = self._net_token(m.group(2), m.group(3), m.group(4))
+            return "%s%s.%s.<%s>.%s%s" % (m.group(1), m.group(2), m.group(3), tok,
+                                          m.group(5), m.group(6))
+        line = _RE_IP_JSON.sub(js, line)
+
+        def info(m):
+            if not _valid_ip(m.group(2), m.group(3), m.group(4), m.group(5)):
+                return m.group(0)
+            self.counts["network"] += 1
+            tok = self._net_token(m.group(2), m.group(3), m.group(4))
+            return "%s%s.%s.<%s>.%s" % (m.group(1), m.group(2), m.group(3), tok, m.group(5))
+        line = _RE_IP_INFO.sub(info, line)
+        return line
+
+    def _do_location(self, line):
+        def num(m):
+            name = m.group(2)
+            if name in _LOC_BLANK:
+                self.counts["location"] += 1
+                return m.group(1) + name + m.group(3) + REDACTED
+            if name in _LOC_ROUND:
+                self.counts["location"] += 1
+                return m.group(1) + name + m.group(3) + _round1(m.group(4))
+            return m.group(0)
+        if "--> Number" in line:
+            line = _RE_NUM.sub(num, line)
+
+        def txt(m):
+            self.counts["location"] += 1
+            return m.group(1) + m.group(2) + m.group(3) + REDACTED
+        if "--> Text" in line:
+            line = _RE_TXT.sub(txt, line)
+
+        def ll(m):
+            self.counts["location"] += 1
+            return m.group(1) + _round1(m.group(2))
+        if "latitude" in line or "longitude" in line:
+            line = _RE_LATLON_JSON.sub(ll, line)
+        return line
+
+    def _do_serial(self, line):
+        # stateful gphoto config dump ("Config: <path>" followed by field lines)
+        mc = _RE_CONFIG.match(line) if line.startswith("Config:") else None
+        if mc:
+            path = mc.group(1).lower()
+            self._cfg_sensitive = any(path.endswith(s) or path.endswith(s + "/")
+                                      for s in _SENS_CONFIG)
+            return line
+        if self._cfg_sensitive:
+            if line.startswith("["):              # timestamped line ends the block
+                self._cfg_sensitive = False
+            elif line.strip():
+                mcur = _RE_CURRENT.match(line)
+                if mcur:
+                    if mcur.group(2).strip():
+                        self.counts["serial"] += 1
+                        return mcur.group(1) + REDACTED
+                    return line
+                if not _RE_FIELD.match(line):
+                    # not a recognisable field line -> possibly mis-decoded value
+                    # line; redact the whole line rather than risk a leak
+                    self.counts["serial"] += 1
+                    return REDACTED
+        # JSON serial fields
+        if "serial" in line.lower():
+            def sj(m):
+                self.counts["serial"] += 1
+                return m.group(1) + REDACTED + m.group(3)
+            line = _RE_SERIAL_JSON.sub(sj, line)
+
+            def sjn(m):
+                self.counts["serial"] += 1
+                return m.group(1) + REDACTED
+            line = _RE_SERIAL_JSON_NUM.sub(sjn, line)
+        return line
+
+    # -- public ----------------------------------------------------------
+    def feed(self, line):
+        low = line.lower()
+        # serial first (stateful on Config/Current lines)
+        if self.en["serial"] and (self._cfg_sensitive or line.startswith("Config:")
+                                  or "serial" in low):
+            line = self._do_serial(line)
+        if self.en["location"] and ("name = " in line or "latitude" in low
+                                    or "longitude" in low):
+            line = self._do_location(line)
+        if self.en["network"] and ("ipv4:" in low or '"ip' in low or '_ip"' in low
+                                   or "gateway" in low or "ip:" in low):
+            line = self._do_network(line)
+        if self.en["hotspot"]:
+            if "ssid" in low or "pass" in low or "psk" in low or "pwd" in low:
+                line = self._do_hotspot(line)
+            elif self.ssid_map:
+                line = self._stray_ssids(line)
+        return line
+
+    _TOKEN_SPLIT = re.compile(r'(<SSID_\d+>|<REDACTED>|<N\d+>)')
+
+    def _stray_ssids(self, line):
+        """Replace known SSIDs that appear outside SSID fields (longest first,
+        never inside existing placeholders, only values of 4+ characters)."""
+        vals = [v for v in sorted(self.ssid_map, key=len, reverse=True) if len(v) >= 4]
+        for v in vals:
+            if v not in line:
+                continue
+            parts = self._TOKEN_SPLIT.split(line)
+            for i in range(0, len(parts), 2):      # even indices = non-token text
+                if v in parts[i]:
+                    self.counts["hotspot"] += parts[i].count(v)
+                    parts[i] = parts[i].replace(v, self.ssid_map[v])
+            line = "".join(parts)
+        return line
+
+
+def _round1(s):
+    try:
+        return ("%.1f" % round(float(s), 1))
+    except ValueError:
+        return s
+
+
+# ----------------------------------------------------------------------------
+#  GuideLog -> PHD2 converter  (validated against phdlogview)
+# ----------------------------------------------------------------------------
+
+_CONV_TS = re.compile(r'^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d): (.*)$')
+_CONV_KV = re.compile(r'([A-Za-z]+)-(-?\d+(?:\.\d+)?)(?: \(([A-Z]?)\))?')
+_STAR_ERR = {2: 'Star lost - low SNR / not found', 4: 'Star lost - too near edge',
+             7: 'Star lost - mass changed', 8: 'Star lost - moved too far'}
+
+
+def _kv(s):
+    return {m.group(1): (m.group(2), m.group(3)) for m in _CONV_KV.finditer(s)}
+
+
+def _wall(ts):
+    import datetime
+    return datetime.datetime.strptime(ts, '%Y-%m-%d %H:%M:%S')
+
+
+def convert_to_phd2(lines, stats=None):
+    """lines: iterable of decoded GuideLog text lines -> list of PHD2 lines."""
+    out, sess, state, ver = [], None, None, {"v": "unknown"}
+
+    def flush():
+        nonlocal sess
+        if not sess:
+            return
+        rows, begin = sess['rows'], sess['begin']
+        steps = [r for r in rows if r['kind'] == 'step']
+        offs = sorted(float(r['dt']) - (r['wall'] - begin).total_seconds() for r in steps)
+        off = offs[len(offs) // 2] if offs else 0.0
+        nxt, upcoming = [None] * len(rows), None
+        for i in range(len(rows) - 1, -1, -1):
+            nxt[i] = upcoming
+            if rows[i]['kind'] == 'step':
+                upcoming = float(rows[i]['dt'])
+        prev = 0.0
+        for i, r in enumerate(rows):
+            if r['kind'] == 'drop':
+                t = (r['wall'] - begin).total_seconds() + off
+                hi = nxt[i] - 0.001 if nxt[i] is not None else t
+                t = min(max(t, prev + 0.001), max(hi, prev + 0.001))
+                r['dt'] = '%.3f' % t
+            if r['kind'] in ('step', 'drop'):
+                prev = float(r['dt'])
+                out.append(r['line'].replace('{DT}', r['dt']))
+            else:
+                out.append(r['line'])
+        sess = None
+
+    for raw in lines:
+        ln = raw.rstrip('\r\n')
+        m = _CONV_TS.match(ln)
+        if m:
+            ts, ev = m.groups()
+            if ev == 'Guiding Begins':
+                flush()
+                state, sess = 'guide', {'begin': _wall(ts), 'rows': []}
+                if stats is not None:
+                    stats['sessions'] += 1
+                out.append('Guiding Begins at ' + ts)
+            elif ev == 'Calibration Begins':
+                flush()
+                state = 'cal'
+                out.append('Calibration Begins at ' + ts)
+            elif ev == 'Guiding Ends':
+                if state == 'guide':
+                    flush()
+                    out.append('Guiding Ends at ' + ts)
+                    out.append('')
+                state = None
+            elif sess is None and ev.startswith(('Guiding Step->', 'Guiding Frame Dropped->')):
+                pass
+            elif ev.startswith('Guiding Step->'):
+                d = _kv(ev)
+                (rd, rdir), (dd, ddir) = d['DurRa'], d['DurDec']
+                row = ','.join([d['FrameNum'][0], '{DT}', '"Mount"',
+                                d['CamOffsetX'][0], d['CamOffsetY'][0],
+                                d['MountOffsetX'][0], d['MountOffsetY'][0],
+                                d['DistRa'][0], d['DistDec'][0],
+                                rd, rdir or '', dd, ddir or '', '', '',
+                                d['StarMass'][0], d['StarSNR'][0], d['StarErr'][0]])
+                sess['rows'].append({'kind': 'step', 'line': row,
+                                     'dt': d['StepTime'][0], 'wall': _wall(ts)})
+                if stats is not None:
+                    stats['steps'] += 1
+            elif ev.startswith('Guiding Frame Dropped->'):
+                d = _kv(ev)
+                err = int(d['StarErr'][0])
+                desc = _STAR_ERR.get(err, 'Frame dropped (StellaVita StarErr %d)' % err)
+                row = ','.join([d['FrameNum'][0], '{DT}', '"DROP"'] + [''] * 12 +
+                               [d['StarMass'][0], d['StarSNR'][0], str(err), '"%s"' % desc])
+                sess['rows'].append({'kind': 'drop', 'line': row, 'dt': None, 'wall': _wall(ts)})
+                if stats is not None:
+                    stats['drops'] += 1
+            elif ev.startswith('Calibration Step->'):
+                d = _kv(ev)
+                dirn = re.search(r'Direction-(\w+)', ev).group(1)
+                out.append(','.join([dirn, d['StepNum'][0], d['DX'][0], d['DY'][0],
+                                     d['X'][0], d['Y'][0], d['Dist'][0]]))
+            continue
+
+        if ln.startswith('Log begin at '):
+            stamp = ln[len('Log begin at '):].replace('_', ' ', 1)
+            if len(stamp) == 17:
+                stamp = stamp[:13] + ':' + stamp[13:15] + ':' + stamp[15:]
+            out.append('PHD2 version StellaVita-{VER}, Log version 2.5. Log enabled at ' + stamp)
+        elif ln.startswith('Version: '):
+            ver['v'] = ln[9:].strip()
+            out[:] = [o.replace('{VER}', ver['v']) for o in out]
+        elif ln.startswith(('Platform:', 'Version protocol:')):
+            pass
+        elif ln == '':
+            continue
+        else:
+            if sess is not None and (sess['rows'] or ln.startswith('INFO: ')):
+                sess['rows'].append({'kind': 'text', 'line': ln})
+                continue
+            out.append(ln)
+            if ln.startswith('Calibration complete'):
+                out.append('')
+                state = None
+    flush()
+    out[:] = [o.replace('{VER}', ver['v']) for o in out]
+    return out
+
+
+# ----------------------------------------------------------------------------
+#  Processing one file
+# ----------------------------------------------------------------------------
+
+def is_our_output(path):
+    stem = os.path.splitext(os.path.basename(path))[0]
+    return any(stem.endswith(s) for s in OUT_SUFFIXES)
+
+
+def _strip_suffix(stem):
+    for s in OUT_SUFFIXES:
+        if stem.endswith(s):
+            return stem[:-len(s)]
+    return stem
+
+
+def _redaction_header(enabled, lang):
+    names = {"hotspot": {"de": "Hotspot/WLAN", "en": "Hotspot/Wi-Fi"},
+             "network": {"de": "Netzwerkadressen", "en": "Network addresses"},
+             "location": {"de": "Standort", "en": "Location"},
+             "serial": {"de": "Seriennummern", "en": "Serial numbers"}}
+    on = [names[c][lang] for c in CATEGORIES if c in enabled]
+    off = [names[c][lang] for c in CATEGORIES if c not in enabled]
+    if lang == "de":
+        txt = ("# Mit dem StellaVita Log Tool v%s entschlüsselt. Inoffiziell, "
+               "keine Verbindung zu ToupTek.\n" % TOOL_VERSION)
+        txt += ("# Geschwärzt: " + (", ".join(on) if on else "nichts") + "\n")
+        if off:
+            txt += ("# ACHTUNG nicht geschwärzt (enthält persönliche Daten): "
+                    + ", ".join(off) + "\n")
+        txt += ("# Achtung: die verschlüsselten Originaldateien enthalten "
+                "weiterhin alle Daten. Leerzeichen und '~' sind nicht unterscheidbar.\n")
+    else:
+        txt = ("# Decoded with StellaVita Log Tool v%s. Unofficial, no connection "
+               "to ToupTek.\n" % TOOL_VERSION)
+        txt += ("# Redacted: " + (", ".join(on) if on else "nothing") + "\n")
+        if off:
+            txt += ("# WARNING not redacted (contains personal data): "
+                    + ", ".join(off) + "\n")
+        txt += ("# Note: the encrypted originals still contain all data. "
+                "Space and '~' are indistinguishable.\n")
+    return txt
+
+
+def _iter_raw(path, plain):
+    """Yield raw lines (bytes, no line ending).  For already-plain inputs the
+    comment header written by this tool (leading '# ' lines) is skipped."""
+    with open(path, "rb") as f:
+        head = plain
+        for rawl in f:
+            rawl = rawl.rstrip(b"\r\n")
+            if head:
+                if rawl.startswith(b"# "):
+                    continue
+                head = False
+            yield rawl
+
+
+def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
+                 full_date=True, report=False, force=False, lang="en",
+                 progress=None, log=print):
+    """Decode (and optionally redact/convert) one file.  Returns a result dict."""
+    res = {"path": path, "kind": None, "outputs": [], "skipped": None,
+           "redactions": {c: 0 for c in CATEGORIES}, "warnings": [],
+           "lines": 0, "uncertain": 0,
+           "guide": {"sessions": 0, "steps": 0, "drops": 0}}
+
+    kind, plain = sniff(path)
+    res["kind"] = kind
+    if kind == "unknown":
+        res["skipped"] = "unknown"
+        log(_t(lang, "skip_unknown") % os.path.basename(path))
+        return res
+
+    size = os.path.getsize(path)
+    stem = _strip_suffix(os.path.splitext(os.path.basename(path))[0])
+    outdir = out_dir or os.path.dirname(os.path.abspath(path))
+    if not report:
+        os.makedirs(outdir, exist_ok=True)
+    red = Redactor(enabled)
+
+    # --- GuideLog: buffer (small), decode, redact, convert ---------------
+    if kind == "guide":
+        decoded = []
+        mdl = None if plain else train_model(path)
+        for rawl in _iter_raw(path, plain):
+            if plain:
+                d, anchored, margin = rawl.decode("latin1"), True, 0.0
+            else:
+                d, anchored, margin = recover(rawl, mdl)
+            res["lines"] += 1
+            if not anchored and margin < UNCERTAIN_MARGIN:
+                res["uncertain"] += 1
+            decoded.append(red.feed(d))
+        _check_guide_version(decoded, res, lang)
+        if report:
+            res["redactions"] = dict(red.counts)
+            _log_report(res, lang, log)
+            return res
+        dec_out = os.path.join(outdir, stem + "_decoded.txt")
+        if _guard(dec_out, force, log, lang):
+            with open(dec_out, "w", encoding="utf-8") as o:
+                o.write(_redaction_header(enabled, lang))
+                o.write("\n".join(decoded) + "\n")
+            res["outputs"].append(dec_out)
+        if make_phd2:
+            gstats = {"sessions": 0, "steps": 0, "drops": 0}
+            phd = convert_to_phd2(decoded, gstats)
+            res["guide"] = gstats
+            phd_out = os.path.join(outdir, stem + "_phd2.txt")
+            if _guard(phd_out, force, log, lang):
+                with open(phd_out, "w", encoding="utf-8") as o:
+                    o.write(_redaction_header(enabled, lang))
+                    o.write("\n".join(phd) + "\n")
+                res["outputs"].append(phd_out)
+        res["redactions"] = dict(red.counts)
+        _log_done(res, lang, log)
+        return res
+
+    # --- glog: cleartext, redact only ------------------------------------
+    if kind == "glog":
+        lines = []
+        for rawl in _iter_raw(path, True):
+            res["lines"] += 1
+            lines.append(red.feed(rawl.decode("latin1")))
+        if report:
+            res["redactions"] = dict(red.counts)
+            _log_report(res, lang, log)
+            return res
+        out = os.path.join(outdir, stem + "_redacted.glog")
+        if _guard(out, force, log, lang):
+            with open(out, "w", encoding="utf-8") as o:
+                o.write(_redaction_header(enabled, lang))
+                o.write("\n".join(lines) + "\n")
+            res["outputs"].append(out)
+        res["redactions"] = dict(red.counts)
+        _log_done(res, lang, log)
+        return res
+
+    # --- DebugLog: stream (large) ---------------------------------------
+    dater = None
+    if full_date:
+        dnm = date_from_name(path)
+        if dnm:
+            dater = DebugDater(dnm)
+        else:
+            res["warnings"].append("no_date")
+            log(_t(lang, "warn_no_date"))
+    dec_out = os.path.join(outdir, stem + "_decoded.txt")
+    if not report and not _guard(dec_out, force, log, lang):
+        return res
+    o = None if report else open(dec_out, "w", encoding="utf-8")
+    try:
+        if o:
+            o.write(_redaction_header(enabled, lang))
+        done = 0
+        mdl = None if plain else train_model(path)
+        for rawl in _iter_raw(path, plain):
+            done += len(rawl) + 1
+            if plain:
+                d, anchored, margin = rawl.decode("latin1"), True, 0.0
+            else:
+                d, anchored, margin = recover(rawl, mdl)
+            res["lines"] += 1
+            if not anchored and margin < UNCERTAIN_MARGIN:
+                res["uncertain"] += 1
+            d = red.feed(d)
+            if dater:
+                d = dater.feed(d)
+            if o:
+                o.write(d + "\n")
+            if progress and (res["lines"] & 0x3FFF) == 0:
+                progress(done, size, res["lines"])
+    finally:
+        if o:
+            o.close()
+    if progress:
+        progress(size, size, res["lines"])
+    res["redactions"] = dict(red.counts)
+    if not report:
+        res["outputs"].append(dec_out)
+    if report:
+        _log_report(res, lang, log)
+    else:
+        _log_done(res, lang, log)
+    return res
+
+
+def _check_guide_version(decoded, res, lang):
+    ver = proto = None
+    for ln in decoded[:10]:
+        if ln.startswith("Version: "):
+            ver = ln[9:].strip()
+        elif ln.startswith("Version protocol: "):
+            proto = ln[18:].strip()
+    if (ver and ver not in KNOWN_APP_VERSIONS) or (proto and proto not in KNOWN_PROTOCOL):
+        res["warnings"].append("version:%s/%s" % (ver, proto))
+
+
+def _guard(path, force, log, lang):
+    if os.path.exists(path) and not force:
+        log(_t(lang, "skip_exists") % os.path.basename(path))
+        return False
+    return True
+
+
+# ----------------------------------------------------------------------------
+#  Folder walking
+# ----------------------------------------------------------------------------
+
+def gather(paths, recursive):
+    files = []
+    for p in paths:
+        if os.path.isdir(p):
+            if recursive:
+                for root, _, names in os.walk(p):
+                    for n in names:
+                        files.append(os.path.join(root, n))
+            else:
+                for n in sorted(os.listdir(p)):
+                    fp = os.path.join(p, n)
+                    if os.path.isfile(fp):
+                        files.append(fp)
+        elif os.path.isfile(p):
+            files.append(p)
+    # drop our own outputs and obvious non-logs
+    out = []
+    for f in files:
+        if is_our_output(f):
+            continue
+        ext = os.path.splitext(f)[1].lower()
+        if ext in (".txt", ".log", ".glog", ""):
+            out.append(f)
+    return out
+
+
+# ----------------------------------------------------------------------------
+#  i18n (UI strings only; log content stays English for phdlogview)
+# ----------------------------------------------------------------------------
+
+_STR = {
+    "skip_unknown": {"de": "Übersprungen (unbekannter Typ): %s",
+                     "en": "Skipped (unknown type): %s"},
+    "skip_exists": {"de": "Übersprungen (existiert, --force zum Überschreiben): %s",
+                    "en": "Skipped (exists, use --force to overwrite): %s"},
+    "warn_no_date": {"de": "  Warnung: kein Datum im Dateinamen, DebugLog ohne volles Datum.",
+                     "en": "  Warning: no date in filename, DebugLog without full date."},
+    "done": {"de": "Fertig: %s", "en": "Done: %s"},
+    "no_files": {"de": "Keine Logdateien gefunden.", "en": "No log files found."},
+    "no_tk": {"de": "Kein Fenster: tkinter fehlt in %s (Python %s): %s\n-> Textmenü.",
+              "en": "No window: tkinter missing in %s (Python %s): %s\n-> text menu."},
+    "no_display": {"de": "Kein Fenster: kein Bildschirm verfügbar (%s)\n-> Textmenü.",
+                   "en": "No window: no display available (%s)\n-> text menu."},
+    "warn_unredacted": {"de": "ACHTUNG: nicht geschwärzt (%s) – die Ausgaben enthalten persönliche Daten.",
+                        "en": "WARNING: not redacted (%s) - the outputs contain personal data."},
+    "report_head": {"de": "Probelauf (nichts geschrieben): %s",
+                    "en": "Dry run (nothing written): %s"},
+    "cat_hotspot": {"de": "Hotspot/WLAN", "en": "Hotspot/Wi-Fi"},
+    "cat_network": {"de": "Netzwerk", "en": "Network"},
+    "cat_location": {"de": "Standort", "en": "Location"},
+    "cat_serial": {"de": "Seriennummern", "en": "Serials"},
+    "stat_lines": {"de": "Zeilen", "en": "lines"},
+    "stat_uncertain": {"de": "unsichere Zeilen", "en": "uncertain lines"},
+    "stat_guide": {"de": "Sessions/Schritte/Ausfälle", "en": "sessions/steps/drops"},
+}
+
+
+def _t(lang, key):
+    return _STR[key][lang]
+
+
+def _cat_summary(counts, lang):
+    return ", ".join("%s %d" % (_t(lang, "cat_" + c), counts[c])
+                     for c in CATEGORIES if counts[c])
+
+
+def warn_unredacted(enabled, lang, log):
+    off = [_t(lang, "cat_" + c) for c in CATEGORIES if c not in enabled]
+    if off:
+        log(_t(lang, "warn_unredacted") % ", ".join(off))
+
+
+def _log_done(res, lang, log):
+    log(_t(lang, "done") % os.path.basename(res["path"]))
+    for out in res["outputs"]:
+        log("  -> " + os.path.basename(out))
+    cs = _cat_summary(res["redactions"], lang)
+    if cs:
+        log("  " + cs)
+    log("  %d %s, %d %s" % (res["lines"], _t(lang, "stat_lines"),
+                            res["uncertain"], _t(lang, "stat_uncertain")))
+    g = res["guide"]
+    if g["sessions"] or g["steps"]:
+        log("  %s: %d/%d/%d" % (_t(lang, "stat_guide"),
+                                g["sessions"], g["steps"], g["drops"]))
+    for w in res["warnings"]:
+        log("  ! " + w)
+
+
+def _log_report(res, lang, log):
+    log(_t(lang, "report_head") % os.path.basename(res["path"]))
+    cs = _cat_summary(res["redactions"], lang)
+    log("  " + (cs if cs else "-"))
+    log("  %d %s, %d %s" % (res["lines"], _t(lang, "stat_lines"),
+                            res["uncertain"], _t(lang, "stat_uncertain")))
+
+
+def default_lang():
+    env = (os.environ.get("LANG") or os.environ.get("LC_ALL") or "").lower()
+    return "de" if env.startswith("de") else "en"
+
+
+# ----------------------------------------------------------------------------
+#  CLI
+# ----------------------------------------------------------------------------
+
+def build_parser():
+    p = argparse.ArgumentParser(
+        prog="stellavita.py",
+        description="Decode, redact and convert ToupTek StellaVita logs. "
+                    "Unofficial tool, no connection to ToupTek.")
+    p.add_argument("paths", nargs="*", help="files or folders")
+    p.add_argument("-o", "--out", help="output folder (default: next to input)")
+    p.add_argument("-r", "--recursive", action="store_true", help="recurse into subfolders")
+    p.add_argument("--force", action="store_true", help="overwrite existing outputs")
+    p.add_argument("--no-phd2", dest="phd2", action="store_false",
+                   help="do not write the PHD2 file for guide logs")
+    p.add_argument("--full-date", dest="full_date", action="store_true", default=True,
+                   help="prefix DebugLog timestamps with the date (default)")
+    p.add_argument("--no-full-date", dest="full_date", action="store_false",
+                   help="keep the original DebugLog time format")
+    p.add_argument("--lang", choices=("de", "en"), default=default_lang(),
+                   help="UI language")
+    p.add_argument("--report", action="store_true",
+                   help="dry run: show what would be redacted, write nothing")
+    p.add_argument("--no-redact", dest="redact", action="store_false",
+                   help="turn off all redaction")
+    for c in CATEGORIES:
+        p.add_argument("--no-redact-" + c, dest="red_" + c, action="store_false",
+                       help="do not redact %s" % c)
+        p.set_defaults(**{"red_" + c: True})
+    return p
+
+
+def enabled_from_args(a):
+    if not a.redact:
+        return ()
+    return tuple(c for c in CATEGORIES if getattr(a, "red_" + c))
+
+
+def run_cli(a):
+    files = gather(a.paths, a.recursive)
+    if not files:
+        print(_t(a.lang, "no_files"))
+        return 1
+    enabled = enabled_from_args(a)
+    warn_unredacted(enabled, a.lang, print)
+    t0 = time.time()
+    n = 0
+    for f in files:
+        _POS_CACHE.clear()
+        prog = make_progress(a.lang) if os.path.getsize(f) > 20 * 1024 * 1024 else None
+        process_file(f, out_dir=a.out, enabled=enabled, make_phd2=a.phd2,
+                     full_date=a.full_date, report=a.report, force=a.force,
+                     lang=a.lang, progress=prog)
+        n += 1
+    print(_summary(n, time.time() - t0, a.lang))
+    return 0
+
+
+def make_progress(lang):
+    word = "Zeilen" if lang == "de" else "lines"
+
+    def prog(done, total, lines):
+        pct = 100.0 * done / total if total else 0
+        sys.stderr.write("\r  %5.1f%%  %d %s   " % (pct, lines, word))
+        sys.stderr.flush()
+        if done >= total:
+            sys.stderr.write("\n")
+    return prog
+
+
+def _summary(n, secs, lang):
+    word = ("Datei" if n == 1 else "Dateien") if lang == "de" else ("file" if n == 1 else "files")
+    return "(%d %s, %.1fs)" % (n, word, secs)
+
+
+# ----------------------------------------------------------------------------
+#  Text menu (fallback when there is no GUI)
+# ----------------------------------------------------------------------------
+
+def run_menu(lang):
+    de = lang == "de"
+    print("StellaVita Log Tool v%s" % TOOL_VERSION)
+    print("(unofficial / inoffiziell)")
+    prompt = "Datei oder Ordner: " if de else "File or folder: "
+    path = input(prompt).strip().strip('"')
+    if not path or not os.path.exists(path):
+        print("?")
+        return 1
+    rec = False
+    if os.path.isdir(path):
+        rec = input("Unterordner? [j/N] " if de else "Recurse? [y/N] ").strip().lower() in ("j", "y")
+    enabled = list(CATEGORIES)
+    q = ("Schwärzen (Enter = alles, sonst Nummern der auszulassenden Kategorien):"
+         if de else "Redact (Enter=all, or drop by number):")
+    print(q)
+    for i, c in enumerate(CATEGORIES, 1):
+        print("  %d %s" % (i, _t(lang, "cat_" + c)))
+    drop = input("Auswahl (z. B. 3 oder 2,3): " if de else "Selection (e.g. 3 or 2,3): ").strip()
+    if drop:
+        rm = {int(x) for x in re.findall(r'\d+', drop)}
+        enabled = [c for i, c in enumerate(CATEGORIES, 1) if i not in rm]
+    phd2 = input("PHD2? [J/n] " if de else "PHD2? [Y/n] ").strip().lower() != ("n")
+    files = gather([path], rec)
+    if not files:
+        print(_t(lang, "no_files"))
+        return 1
+    warn_unredacted(enabled, lang, print)
+    t0 = time.time()
+    for f in files:
+        _POS_CACHE.clear()
+        prog = make_progress(lang) if os.path.getsize(f) > 20 * 1024 * 1024 else None
+        process_file(f, enabled=tuple(enabled), make_phd2=phd2, lang=lang, progress=prog)
+    print(_summary(len(files), time.time() - t0, lang))
+    return 0
+
+
+# ----------------------------------------------------------------------------
+#  tkinter GUI
+# ----------------------------------------------------------------------------
+
+def run_gui(lang):
+    de = lang == "de"
+    try:
+        import tkinter as tk
+        from tkinter import filedialog, ttk
+    except Exception as e:     # signal: no GUI available -> text menu
+        print(_t(lang, "no_tk") % (sys.executable, sys.version.split()[0], e))
+        return None
+    try:
+        root = tk.Tk()
+    except Exception as e:     # tkinter installed but no display (SSH, console)
+        print(_t(lang, "no_display") % e)
+        return None
+    root.title("StellaVita Log Tool v%s" % TOOL_VERSION)
+    root.geometry("640x560")
+    pad = {"padx": 8, "pady": 4}
+
+    sel = tk.StringVar()
+    rowf = tk.Frame(root); rowf.pack(fill="x", **pad)
+    tk.Entry(rowf, textvariable=sel).pack(side="left", fill="x", expand=True)
+    tk.Button(rowf, text=("Datei..." if de else "File..."),
+              command=lambda: sel.set(filedialog.askopenfilename() or sel.get())
+              ).pack(side="left")
+    tk.Button(rowf, text=("Ordner..." if de else "Folder..."),
+              command=lambda: sel.set(filedialog.askdirectory() or sel.get())
+              ).pack(side="left")
+
+    opt = tk.Frame(root); opt.pack(fill="x", **pad)
+    v_rec = tk.BooleanVar(value=False)
+    v_phd2 = tk.BooleanVar(value=True)
+    v_date = tk.BooleanVar(value=True)
+    v_force = tk.BooleanVar(value=False)
+    tk.Checkbutton(opt, text=("Unterordner" if de else "Recurse"), variable=v_rec).pack(side="left")
+    tk.Checkbutton(opt, text="PHD2", variable=v_phd2).pack(side="left")
+    tk.Checkbutton(opt, text=("Volles Datum" if de else "Full date"), variable=v_date).pack(side="left")
+    tk.Checkbutton(opt, text=("Überschreiben" if de else "Overwrite"), variable=v_force).pack(side="left")
+
+    catf = tk.LabelFrame(root, text=("Schwärzen" if de else "Redact")); catf.pack(fill="x", **pad)
+    cvars = {}
+    for c in CATEGORIES:
+        cvars[c] = tk.BooleanVar(value=True)
+        tk.Checkbutton(catf, text=_t(lang, "cat_" + c), variable=cvars[c]).pack(side="left")
+
+    bar = ttk.Progressbar(root, maximum=100); bar.pack(fill="x", **pad)
+    txt = tk.Text(root, height=20); txt.pack(fill="both", expand=True, **pad)
+
+    def logw(msg):
+        txt.insert("end", msg + "\n"); txt.see("end"); root.update_idletasks()
+
+    def prog(done, total, lines):
+        bar["value"] = 100.0 * done / total if total else 0
+        root.update_idletasks()
+
+    def go(report=False):
+        txt.delete("1.0", "end")
+        p = sel.get().strip().strip('"')
+        if not p or not os.path.exists(p):
+            logw("?"); return
+        enabled = tuple(c for c in CATEGORIES if cvars[c].get())
+        files = gather([p], v_rec.get())
+        if not files:
+            logw(_t(lang, "no_files")); return
+        warn_unredacted(enabled, lang, logw)
+        for f in files:
+            _POS_CACHE.clear()
+            process_file(f, enabled=enabled, make_phd2=v_phd2.get(),
+                         full_date=v_date.get(), report=report, force=v_force.get(),
+                         lang=lang, progress=prog, log=logw)
+        bar["value"] = 100
+
+    btn = tk.Frame(root); btn.pack(fill="x", **pad)
+    tk.Button(btn, text=("Probelauf" if de else "Dry run"),
+              command=lambda: go(report=True)).pack(side="left")
+    tk.Button(btn, text=("Start" if de else "Run"),
+              command=lambda: go(report=False)).pack(side="right")
+
+    # test hooks (used by the automated test suite only)
+    ar = os.environ.get("SV_GUI_AUTORUN")
+    if ar:
+        sel.set(ar)
+        root.after(300, lambda: go(report=False))
+    ac = os.environ.get("SV_GUI_AUTOCLOSE")
+    if ac:
+        root.after(int(ac), root.destroy)
+    root.mainloop()
+    return 0
+
+
+# ----------------------------------------------------------------------------
+#  main
+# ----------------------------------------------------------------------------
+
+def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):      # never crash on odd consoles
+        try:
+            stream.reconfigure(errors="replace")
+        except Exception:
+            pass
+    argv = sys.argv[1:] if argv is None else argv
+    a = build_parser().parse_args(argv)
+    if a.paths:
+        return run_cli(a)
+    # no paths -> interactive
+    r = run_gui(a.lang)
+    if r is None:
+        return run_menu(a.lang)
+    return r
+
+
+if __name__ == "__main__":
+    sys.exit(main())

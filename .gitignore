@@ -1,0 +1,18 @@
+# Logs und Ausgaben koennen persoenliche Daten enthalten - nie committen
+GuideLog_*
+DebugLog_*
+*.glog
+*_decoded.txt
+*_phd2.txt
+*_redacted*
+logs/
+*.zip
+*.bz2
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Persoenliche Claude-Vorgaben (laut Claude-Code-Doku nicht einchecken)
+CLAUDE.local.md
+CLAUDE.md
