@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 ph3x
+# SPDX-License-Identifier: GPL-3.0-or-later
 """
 StellaVita Log Tool  -  decode, redact and convert ToupTek StellaVita logs.
 
@@ -23,6 +25,9 @@ these logs and decodes to a space.
 Usage:  python3 stellavita.py [options] [file-or-folder ...]
 Run without arguments for a window (or a text menu if tkinter is missing).
 No third-party packages are required - pure standard library.
+
+License: GNU GPL v3 or later (see LICENSE).  This program comes with
+ABSOLUTELY NO WARRANTY.
 """
 
 import os

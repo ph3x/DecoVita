@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# SPDX-FileCopyrightText: 2026 ph3x
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# phdlogview_parse() is a Python port of parts of phdlogview's logparser.cpp,
+# which is licensed under the GPL v3. Copyright of that code remains with the
+# phdlogview authors.
 """
 Test suite for stellavita.py (Version 1).
 
