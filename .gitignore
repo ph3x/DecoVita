@@ -1,4 +1,4 @@
-# Logs und Ausgaben koennen persoenliche Daten enthalten - nie committen
+# Logs and tool outputs can contain personal data - never commit
 GuideLog_*
 DebugLog_*
 *.glog
@@ -13,6 +13,10 @@ logs/
 __pycache__/
 *.py[cod]
 
-# Persoenliche Claude-Vorgaben (laut Claude-Code-Doku nicht einchecken)
+# Claude Code project notes: kept local by maintainer decision
+# (CLAUDE.local.md is private by design; CLAUDE.md could be shared but is not)
 CLAUDE.local.md
 CLAUDE.md
+
+# Credentials (GitHub token etc.)
+.secrets/
