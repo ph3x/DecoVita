@@ -15,7 +15,7 @@ des ToupTek StellaVita. Keine Verbindung zu ToupTek.
 
 ## Voraussetzungen
 
-- Python 3.11 oder neuer, nur Standardbibliothek
+- Python 3.11 oder neuer (getestet mit 3.11 bis 3.14), nur Standardbibliothek
 - Für das Fenster: tkinter. Unter Arch/CachyOS ist das das Paket `tk`. Ohne
   tkinter oder ohne Bildschirm startet stattdessen ein Textmenü.
 
@@ -44,7 +44,8 @@ Nützliche Schalter:
 | DebugLog | `<Name>_decoded.txt` (Zeitstempel mit vollem Datum) |
 | `.glog` | `<Name>_redacted.glog` |
 
-Die Ausgaben landen neben der Eingabe oder im mit `-o` angegebenen Ordner. Die
+Die Ausgaben landen neben der Eingabe oder in einem Zielordner (`-o` in der
+Kommandozeile, "Zielordner" im Fenster; wird bei Bedarf angelegt). Die
 Originale werden nie verändert, und vorhandene Ausgaben werden nur mit `--force`
 überschrieben. Jede Ausgabe beginnt mit einigen `# `-Zeilen zu Tool-Version und
 Schwärzung.

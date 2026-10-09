@@ -917,6 +917,9 @@ _STR = {
     "stat_lines": {"de": "Zeilen", "en": "lines"},
     "stat_uncertain": {"de": "unsichere Zeilen", "en": "uncertain lines"},
     "stat_guide": {"de": "Sessions/Schritte/Ausfälle", "en": "sessions/steps/drops"},
+    "gui_outdir": {"de": "Zielordner (leer = neben der Eingabe):",
+                   "en": "Output folder (empty = next to input):"},
+    "bad_outdir": {"de": "Zielordner ist eine Datei: %s", "en": "Output folder is a file: %s"},
 }
 
 
@@ -1086,10 +1089,8 @@ def run_menu(lang):
 # ----------------------------------------------------------------------------
 
 def run_gui(lang):
-    de = lang == "de"
     try:
         import tkinter as tk
-        from tkinter import filedialog, ttk
     except Exception as e:     # signal: no GUI available -> text menu
         print(_t(lang, "no_tk") % (sys.executable, sys.version.split()[0], e))
         return None
@@ -1098,8 +1099,28 @@ def run_gui(lang):
     except Exception as e:     # tkinter installed but no display (SSH, console)
         print(_t(lang, "no_display") % e)
         return None
+    g = build_gui(root, lang)
+
+    # test hooks (used by the automated test suite only)
+    ar = os.environ.get("SV_GUI_AUTORUN")
+    if ar:
+        g.sel.set(ar)
+        root.after(300, lambda: g.go(report=False))
+    ac = os.environ.get("SV_GUI_AUTOCLOSE")
+    if ac:
+        root.after(int(ac), root.destroy)
+    root.mainloop()
+    return 0
+
+
+def build_gui(root, lang):
+    """Fill the main window.  Returns a namespace with the variables, widgets and
+    the go() action (used by run_gui and by the test suite)."""
+    import types
+    import tkinter as tk
+    from tkinter import filedialog, ttk
+    de = lang == "de"
     root.title("StellaVita Log Tool v%s" % TOOL_VERSION)
-    root.geometry("640x560")
     pad = {"padx": 8, "pady": 4}
 
     sel = tk.StringVar()
@@ -1110,6 +1131,14 @@ def run_gui(lang):
               ).pack(side="left")
     tk.Button(rowf, text=("Ordner..." if de else "Folder..."),
               command=lambda: sel.set(filedialog.askdirectory() or sel.get())
+              ).pack(side="left")
+
+    outv = tk.StringVar()
+    outf = tk.Frame(root); outf.pack(fill="x", **pad)
+    tk.Label(outf, text=_t(lang, "gui_outdir")).pack(side="left")
+    tk.Entry(outf, textvariable=outv).pack(side="left", fill="x", expand=True)
+    tk.Button(outf, text=("Ordner..." if de else "Folder..."),
+              command=lambda: outv.set(filedialog.askdirectory() or outv.get())
               ).pack(side="left")
 
     opt = tk.Frame(root); opt.pack(fill="x", **pad)
@@ -1128,8 +1157,24 @@ def run_gui(lang):
         cvars[c] = tk.BooleanVar(value=True)
         tk.Checkbutton(catf, text=_t(lang, "cat_" + c), variable=cvars[c]).pack(side="left")
 
-    bar = ttk.Progressbar(root, maximum=100); bar.pack(fill="x", **pad)
-    txt = tk.Text(root, height=20); txt.pack(fill="both", expand=True, **pad)
+    # Buttons and progress bar are packed from the bottom *before* the log text,
+    # so the text is what shrinks when the window is small (issue #1).
+    btn = tk.Frame(root); btn.pack(side="bottom", fill="x", **pad)
+    b_dry = tk.Button(btn, text=("Probelauf" if de else "Dry run"),
+                      command=lambda: go(report=True))
+    b_dry.pack(side="left")
+    b_run = tk.Button(btn, text=("Start" if de else "Run"),
+                      command=lambda: go(report=False))
+    b_run.pack(side="right")
+    bar = ttk.Progressbar(root, maximum=100); bar.pack(side="bottom", fill="x", **pad)
+    txt = tk.Text(root, height=6); txt.pack(fill="both", expand=True, **pad)
+
+    # Size from what the widgets actually need (fonts, display scaling), so nothing
+    # is cut off; 640x560 is only the preferred minimum.
+    root.update_idletasks()
+    rw, rh = root.winfo_reqwidth(), root.winfo_reqheight()
+    root.minsize(rw, rh)
+    root.geometry("%dx%d" % (max(640, rw), max(560, rh)))
 
     def logw(msg):
         txt.insert("end", msg + "\n"); txt.see("end"); root.update_idletasks()
@@ -1143,6 +1188,9 @@ def run_gui(lang):
         p = sel.get().strip().strip('"')
         if not p or not os.path.exists(p):
             logw("?"); return
+        out = outv.get().strip().strip('"') or None
+        if out and os.path.exists(out) and not os.path.isdir(out):
+            logw(_t(lang, "bad_outdir") % out); return
         enabled = tuple(c for c in CATEGORIES if cvars[c].get())
         files = gather([p], v_rec.get())
         if not files:
@@ -1150,27 +1198,27 @@ def run_gui(lang):
         warn_unredacted(enabled, lang, logw)
         for f in files:
             _POS_CACHE.clear()
-            process_file(f, enabled=enabled, make_phd2=v_phd2.get(),
+            process_file(f, out_dir=out, enabled=enabled, make_phd2=v_phd2.get(),
                          full_date=v_date.get(), report=report, force=v_force.get(),
                          lang=lang, progress=prog, log=logw)
         bar["value"] = 100
 
-    btn = tk.Frame(root); btn.pack(fill="x", **pad)
-    tk.Button(btn, text=("Probelauf" if de else "Dry run"),
-              command=lambda: go(report=True)).pack(side="left")
-    tk.Button(btn, text=("Start" if de else "Run"),
-              command=lambda: go(report=False)).pack(side="right")
+    def all_widgets():
+        """Every non-container widget in the window (for layout checks)."""
+        out, todo = [], list(root.winfo_children())
+        while todo:
+            w = todo.pop()
+            kids = w.winfo_children()
+            if kids:
+                todo.extend(kids)
+            else:
+                out.append(w)
+        return out
 
-    # test hooks (used by the automated test suite only)
-    ar = os.environ.get("SV_GUI_AUTORUN")
-    if ar:
-        sel.set(ar)
-        root.after(300, lambda: go(report=False))
-    ac = os.environ.get("SV_GUI_AUTOCLOSE")
-    if ac:
-        root.after(int(ac), root.destroy)
-    root.mainloop()
-    return 0
+    return types.SimpleNamespace(root=root, sel=sel, out=outv, rec=v_rec, phd2=v_phd2,
+                                 date=v_date, force=v_force, cats=cvars, text=txt,
+                                 bar=bar, btn_dry=b_dry, btn_run=b_run, go=go,
+                                 all_widgets=all_widgets)
 
 
 # ----------------------------------------------------------------------------

@@ -15,7 +15,7 @@ StellaVita. Not affiliated with ToupTek.
 
 ## Requirements
 
-- Python 3.11 or newer, standard library only
+- Python 3.11 or newer (tested with 3.11 to 3.14), standard library only
 - For the window: tkinter. On Arch/CachyOS this is the package `tk`. Without
   tkinter or without a display the tool falls back to a text menu.
 
@@ -44,7 +44,8 @@ Useful switches:
 | DebugLog | `<name>_decoded.txt` (timestamps with full date) |
 | `.glog` | `<name>_redacted.glog` |
 
-The outputs are written next to the input, or into the folder given with `-o`.
+The outputs are written next to the input, or into an output folder (`-o` on the
+command line, "Output folder" in the window; created if missing).
 The originals are never modified, and existing outputs are only overwritten with
 `--force`. Every output starts with a few `# ` lines stating the tool version and
 what was redacted.

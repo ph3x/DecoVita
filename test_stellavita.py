@@ -824,8 +824,93 @@ def t_gui(fx, tmp):
         p = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, env=env, timeout=60)
         made = sorted(os.listdir(work))
         check("Fenster-Lauf erzeugt Ausgaben", any(m.endswith("_phd2.txt") for m in made), str(made) + p.stderr[-200:])
+        _gui_layout_and_outdir(fx, tmp, env)
     finally:
         xv.terminate()
+
+
+# Runs inside a subprocess on the Xvfb display; prints one JSON object.
+_GUI_PROBE = r'''
+import json, os, sys, importlib.util
+spec = importlib.util.spec_from_file_location("sv", sys.argv[1])
+sv = importlib.util.module_from_spec(spec); spec.loader.exec_module(sv)
+import tkinter as tk
+src, out_new, out_file, lang = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+res = {}
+
+def visible(root, w):
+    """Mapped and fully inside the window's client area."""
+    if not w.winfo_ismapped():
+        return False
+    top = w.winfo_rooty() - root.winfo_rooty()
+    left = w.winfo_rootx() - root.winfo_rootx()
+    return (top >= 0 and left >= 0 and top + w.winfo_height() <= root.winfo_height()
+            and left + w.winfo_width() <= root.winfo_width())
+
+# layout at normal and enlarged display scaling (1.0x, 1.25x, 1.5x of 96 dpi)
+for scale in (1.3333, 1.6667, 2.0):
+    root = tk.Tk()
+    root.tk.call("tk", "scaling", scale)
+    g = sv.build_gui(root, lang)
+    for name, geo in (("default", None), ("min", "%dx%d" % root.minsize()), ("tiny", "200x120")):
+        if geo:
+            root.geometry(geo)
+        root.update()
+        res["%s@%s" % (name, scale)] = {
+            "size": [root.winfo_width(), root.winfo_height()],
+            "req": [root.winfo_reqwidth(), root.winfo_reqheight()],
+            "widgets": all(visible(root, w) for w in g.all_widgets())}
+    root.destroy()
+root = tk.Tk()
+g = sv.build_gui(root, lang)
+root.update()
+# dry run with an output folder must not create it
+g.sel.set(src); g.out.set(out_new)
+g.go(report=True); root.update()
+res["dry_created"] = os.path.exists(out_new)
+# real run into a not yet existing output folder
+g.go(report=False); root.update()
+res["out_files"] = sorted(os.listdir(out_new)) if os.path.isdir(out_new) else None
+res["src_files"] = sorted(os.listdir(os.path.dirname(src)))
+# output folder that is a file -> message, nothing written
+g.out.set(out_file); g.go(report=False); root.update()
+res["file_msg"] = g.text.get("1.0", "end").strip()
+root.destroy()
+print(json.dumps(res))
+'''
+
+
+def _gui_layout_and_outdir(fx, tmp, env):
+    import json
+    work = os.path.join(tmp, "gui_probe_in")
+    os.makedirs(work)
+    shutil.copy(fx["guide"], work)
+    src = os.path.join(work, os.path.basename(fx["guide"]))
+    out_new = os.path.join(tmp, "gui_probe_out", "nested")
+    out_file = os.path.join(tmp, "gui_probe_isfile")
+    write(out_file, "x")
+    env = {k: v for k, v in env.items() if not k.startswith("SV_GUI_")}
+    p = subprocess.run([sys.executable, "-c", _GUI_PROBE, TOOL, src, out_new, out_file, "de"],
+                       capture_output=True, text=True, env=env, timeout=60)
+    try:
+        r = json.loads(p.stdout.strip().splitlines()[-1])
+    except Exception:
+        check("Fenster-Probe laeuft", False, (p.stderr or p.stdout)[-400:])
+        return
+    for scale, label in (("1.3333", "1.0x"), ("1.6667", "1.25x"), ("2.0", "1.5x")):
+        for name, what in (("default", "Startgroesse"), ("min", "Mindestgroesse"),
+                           ("tiny", "200x120 angefordert")):
+            k = "%s@%s" % (name, scale)
+            check("Skalierung %s, %s: alle Bedienelemente sichtbar (inkl. Probelauf/Start)"
+                  % (label, what), r[k]["widgets"], str(r[k]))
+    check("Zielordner: Probelauf legt ihn nicht an", r["dry_created"] is False)
+    check("Zielordner: wird angelegt und enthaelt die Ausgaben",
+          r["out_files"] == ["GuideLog_2026-01-15_201500_decoded.txt",
+                             "GuideLog_2026-01-15_201500_phd2.txt"], str(r["out_files"]))
+    check("Zielordner: nichts neben der Eingabe geschrieben",
+          r["src_files"] == [os.path.basename(src)], str(r["src_files"]))
+    check("Zielordner ist eine Datei: Meldung, kein Lauf",
+          r["file_msg"].startswith("Zielordner ist eine Datei:"), r["file_msg"][:200])
 
 
 # ---------------------------------------------------------------------------
