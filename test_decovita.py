@@ -7,13 +7,13 @@
 # which is licensed under the GPL v3. Copyright of that code remains with the
 # phdlogview authors.
 """
-Test suite for stellavita.py.
+Test suite for decovita.py.
 
 Builds synthetic, fully fictitious log files (all SSIDs, passwords, serial
 numbers, IPs and coordinates below are made up), encrypts them with the
 inverse cipher, runs the tool and checks every documented behaviour.
 
-Run:  python3 test_stellavita.py [path/to/stellavita.py]
+Run:  python3 test_decovita.py [path/to/decovita.py]
 """
 import os
 import re
@@ -27,7 +27,7 @@ import subprocess
 import importlib.util
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-TOOL = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "stellavita.py")
+TOOL = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "decovita.py")
 spec = importlib.util.spec_from_file_location("sv", TOOL)
 sv = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(sv)
@@ -530,6 +530,11 @@ def t_header(fx, tmp):
           "# Geschwärzt: Hotspot/WLAN, Seriennummern" in head, str(head))
     check("Header DE warns about categories not redacted",
           any(l.startswith("# ACHTUNG nicht geschwärzt") and "Netzwerkadressen, Standort" in l for l in head), str(head))
+    check("Header DE names the tool DecoVita",
+          head[0].startswith("# Mit DecoVita v%s entschlüsselt." % sv.TOOL_VERSION), head[0])
+    src = open(TOOL, encoding="utf-8").read()
+    check("tool is not called 'StellaVita Log Tool' anywhere (trademark, #16)",
+          "StellaVita Log Tool" not in src)
     check("Header: 'unofficial' and originals note",
           "Inoffiziell" in head[0] and any("Originaldateien" in l for l in head))
     out3 = os.path.join(tmp, "o_hdr_all")
@@ -541,6 +546,8 @@ def t_header(fx, tmp):
     os.makedirs(out2)
     r = sv.process_file(fx["debug"], out_dir=out2, enabled=(), full_date=False, lang="en", log=quiet)
     head = [l for l in open(r["outputs"][0], encoding="utf-8").read().split("\n") if l.startswith("# ")]
+    check("Header EN names the tool DecoVita",
+          head[0].startswith("# Decoded with DecoVita v%s." % sv.TOOL_VERSION), head[0])
     check("Header EN 'Redacted: nothing'", "# Redacted: nothing" in head, str(head))
     check("Header EN warns (WARNING not redacted)", any(l.startswith("# WARNING not redacted") for l in head), str(head))
 
@@ -828,13 +835,13 @@ def t_gui(fx, tmp):
     try:
         import time
         time.sleep(1)
-        env = dict(os.environ, DISPLAY=disp, SV_GUI_AUTOCLOSE="1500")
+        env = dict(os.environ, DISPLAY=disp, DV_GUI_AUTOCLOSE="1500")
         p = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, env=env, timeout=60)
         check("window starts and closes cleanly", p.returncode == 0, p.stderr[-300:])
         work = os.path.join(tmp, "gui_in")
         os.makedirs(work)
         shutil.copy(fx["guide"], work)
-        env = dict(env, SV_GUI_AUTORUN=work, SV_GUI_AUTOCLOSE="6000")
+        env = dict(env, DV_GUI_AUTORUN=work, DV_GUI_AUTOCLOSE="6000")
         p = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, env=env, timeout=60)
         made = sorted(os.listdir(work))
         check("window run writes outputs", any(m.endswith("_phd2.txt") for m in made), str(made) + p.stderr[-200:])
@@ -880,6 +887,7 @@ root = tk.Tk()
 g = sv.build_gui(root, lang)
 root.update()
 res["start_text"] = g.text.get("1.0", "end").strip()
+res["title"] = root.title()
 # dry run with an output folder must not create it
 g.sel.set(src); g.out.set(out_new)
 g.go(report=True); root.update()
@@ -905,7 +913,7 @@ def _gui_layout_and_outdir(fx, tmp, env):
     out_new = os.path.join(tmp, "gui_probe_out", "nested")
     out_file = os.path.join(tmp, "gui_probe_isfile")
     write(out_file, "x")
-    env = {k: v for k, v in env.items() if not k.startswith("SV_GUI_")}
+    env = {k: v for k, v in env.items() if not k.startswith("DV_GUI_")}
     p = subprocess.run([sys.executable, "-c", _GUI_PROBE, TOOL, src, out_new, out_file, "de"],
                        capture_output=True, text=True, env=env, timeout=60)
     try:
@@ -922,8 +930,9 @@ def _gui_layout_and_outdir(fx, tmp, env):
             check("scaling %s, %s: source and output folder fields aligned"
                   % (label, what), r[k]["entries"][0] == r[k]["entries"][1], str(r[k]["entries"]))
     check("window: GPL notice shown at start (DE)",
-          r["start_text"].startswith("StellaVita Log Tool v%s - Copyright" % sv.TOOL_VERSION)
+          r["start_text"].startswith("DecoVita v%s - Copyright" % sv.TOOL_VERSION)
           and "OHNE JEDE GEWÄHRLEISTUNG" in r["start_text"], r["start_text"][:200])
+    check("window title: DecoVita vX", r["title"] == "DecoVita v%s" % sv.TOOL_VERSION, r["title"])
     check("output folder: dry run does not create it", r["dry_created"] is False)
     check("output folder: created and contains the outputs",
           r["out_files"] == ["GuideLog_2026-01-15_201500_decoded.txt",

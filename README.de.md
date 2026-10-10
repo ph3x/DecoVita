@@ -1,4 +1,4 @@
-# DecoVita – StellaVita Log Tool
+# DecoVita
 
 [English](README.md) | **Deutsch**
 
@@ -22,9 +22,9 @@ des ToupTek StellaVita. Keine Verbindung zu ToupTek.
 ## Benutzung
 
 ```
-python stellavita.py                     # Fenster (tkinter), sonst Textmenü
-python stellavita.py <Datei|Ordner> [-r] [-o Ausgabeordner] [--lang de|en]
-python stellavita.py --help              # alle Schalter
+python decovita.py                     # Fenster (tkinter), sonst Textmenü
+python decovita.py <Datei|Ordner> [-r] [-o Ausgabeordner] [--lang de|en]
+python decovita.py --help              # alle Schalter
 ```
 
 Nützliche Schalter:
@@ -97,7 +97,7 @@ gehören nicht ins Repo (siehe `.gitignore`).
 ## Tests
 
 ```
-python test_stellavita.py
+python test_decovita.py
 ```
 
 ## Lizenz

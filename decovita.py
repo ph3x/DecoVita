@@ -3,7 +3,7 @@
 # SPDX-FileCopyrightText: 2026 ph3x
 # SPDX-License-Identifier: GPL-3.0-or-later
 """
-StellaVita Log Tool  -  decode, redact and convert ToupTek StellaVita logs.
+DecoVita  -  decode, redact and convert ToupTek StellaVita logs.
 
 This is an unofficial community tool. It has no connection to ToupTek Astro.
 
@@ -22,7 +22,7 @@ documentation.  Per line, only the printable characters 33..126 are used:
 Space and '~' collide (95 plaintext symbols mapped onto 94); '~' is rare in
 these logs and decodes to a space.
 
-Usage:  python3 stellavita.py [options] [file-or-folder ...]
+Usage:  python3 decovita.py [options] [file-or-folder ...]
 Run without arguments for a window (or a text menu if tkinter is missing).
 No third-party packages are required - pure standard library.
 
@@ -678,7 +678,7 @@ def _redaction_header(enabled, lang):
     on = [names[c][lang] for c in CATEGORIES if c in enabled]
     off = [names[c][lang] for c in CATEGORIES if c not in enabled]
     if lang == "de":
-        txt = ("# Mit dem StellaVita Log Tool v%s entschlüsselt. Inoffiziell, "
+        txt = ("# Mit DecoVita v%s entschlüsselt. Inoffiziell, "
                "keine Verbindung zu ToupTek.\n" % TOOL_VERSION)
         txt += ("# Geschwärzt: " + (", ".join(on) if on else "nichts") + "\n")
         if off:
@@ -687,7 +687,7 @@ def _redaction_header(enabled, lang):
         txt += ("# Achtung: die verschlüsselten Originaldateien enthalten "
                 "weiterhin alle Daten. Leerzeichen und '~' sind nicht unterscheidbar.\n")
     else:
-        txt = ("# Decoded with StellaVita Log Tool v%s. Unofficial, no connection "
+        txt = ("# Decoded with DecoVita v%s. Unofficial, no connection "
                "to ToupTek.\n" % TOOL_VERSION)
         txt += ("# Redacted: " + (", ".join(on) if on else "nothing") + "\n")
         if off:
@@ -918,11 +918,11 @@ _STR = {
     "stat_lines": {"de": "Zeilen", "en": "lines"},
     "stat_uncertain": {"de": "unsichere Zeilen", "en": "uncertain lines"},
     "stat_guide": {"de": "Sessions/Schritte/Ausfälle", "en": "sessions/steps/drops"},
-    "gpl_notice": {"de": "StellaVita Log Tool v%s - %s\n"
+    "gpl_notice": {"de": "DecoVita v%s - %s\n"
                           "Dieses Programm kommt OHNE JEDE GEWÄHRLEISTUNG. Es ist freie "
                           "Software (GPL-3.0-or-later); Weitergabe unter deren Bedingungen "
                           "ist erlaubt, siehe LICENSE.",
-                   "en": "StellaVita Log Tool v%s - %s\n"
+                   "en": "DecoVita v%s - %s\n"
                           "This program comes with ABSOLUTELY NO WARRANTY. It is free "
                           "software (GPL-3.0-or-later); you may redistribute it under its "
                           "conditions, see LICENSE."},
@@ -989,7 +989,7 @@ def default_lang():
 
 def build_parser():
     p = argparse.ArgumentParser(
-        prog="stellavita.py",
+        prog="decovita.py",
         description="Decode, redact and convert ToupTek StellaVita logs. "
                     "Unofficial tool, no connection to ToupTek.",
         epilog=gpl_notice("en").replace("\n", " "))
@@ -1118,11 +1118,11 @@ def run_gui(lang):
     g = build_gui(root, lang)
 
     # test hooks (used by the automated test suite only)
-    ar = os.environ.get("SV_GUI_AUTORUN")
+    ar = os.environ.get("DV_GUI_AUTORUN")
     if ar:
         g.sel.set(ar)
         root.after(300, lambda: g.go(report=False))
-    ac = os.environ.get("SV_GUI_AUTOCLOSE")
+    ac = os.environ.get("DV_GUI_AUTOCLOSE")
     if ac:
         root.after(int(ac), root.destroy)
     root.mainloop()
@@ -1136,7 +1136,7 @@ def build_gui(root, lang):
     import tkinter as tk
     from tkinter import filedialog, ttk
     de = lang == "de"
-    root.title("StellaVita Log Tool v%s" % TOOL_VERSION)
+    root.title("DecoVita v%s" % TOOL_VERSION)
     pad = {"padx": 8, "pady": 4}
 
     # source and output folder share one grid, so both entries line up (issue #12)
