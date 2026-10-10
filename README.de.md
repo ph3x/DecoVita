@@ -100,6 +100,23 @@ gehören nicht ins Repo (siehe `.gitignore`).
 python test_decovita.py
 ```
 
+## Mitmachen
+
+Fehlermeldungen, Ideen und Pull Requests sind willkommen, über
+[GitHub Issues](https://github.com/ph3x/DecoVita/issues) und Pull Requests.
+
+- **Fehlermeldungen:** bitte DecoVita-Version (Fenstertitel oder `--help`),
+  Betriebssystem, Python-Version, den verwendeten Befehl bzw. die Schritte sowie
+  die Meldung oder die Übersichtstabelle angeben.
+- **Niemals Original-Logs anhängen.** Sie enthalten deine WLAN-Namen,
+  Netzwerkadressen, deinen Standort und Seriennummern. Wird ein Log-Auszug
+  gebraucht, nimm die geschwärzte Ausgabe des Tools und prüfe sie Zeile für Zeile,
+  bevor du sie postest. Issues sind öffentlich.
+- **Pull Requests:** `python test_decovita.py` ausführen (alle Tests müssen
+  bestehen), für jede Korrektur und jede Funktion einen Test ergänzen, nur
+  Standardbibliothek, Code und Kommentare auf Englisch, Texte für Nutzer auf
+  Englisch und Deutsch.
+
 ## Lizenz
 
 GNU General Public License v3.0 oder später (`GPL-3.0-or-later`), siehe
