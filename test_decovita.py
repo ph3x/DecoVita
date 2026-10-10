@@ -740,6 +740,11 @@ def t_cli(fx, tmp):
     txt = open(os.path.join(out, "DebugLog_2026-01-15_201500_decoded.txt"), encoding="utf-8").read()
     check("--no-redact-network works", FAKE["ip_dev"] in txt and FAKE["ssid_long"] not in txt)
     check("English messages", "Done:" in p.stdout, p.stdout[:200])
+    check("CLI: status line and summary table",
+          "[1/1] DebugLog 1/1: DebugLog_2026-01-15_201500.txt" in p.stdout
+          and re.search(r"^#\s+Type\s+File\s+Lines", p.stdout, re.M) is not None, p.stdout[-600:])
+    check("CLI: stdout free of control characters (redirect-safe)",
+          all(ch.isprintable() or ch == "\n" for ch in p.stdout))
     check("singular for one file ('1 file')", "(1 file," in p.stdout, p.stdout[-80:])
     p = subprocess.run([py, TOOL, fx["glog"], "-o", os.path.join(tmp, "o_cli_nr"), "--lang", "de", "--no-redact"],
                        capture_output=True, text=True)
@@ -750,6 +755,49 @@ def t_cli(fx, tmp):
     out2 = os.path.join(tmp, "o_cli_rep")
     p = subprocess.run([py, TOOL, fx["debug"], "-o", out2, "--report"], capture_output=True, text=True)
     check("--report writes nothing", not os.path.exists(out2) or os.listdir(out2) == [])
+
+
+def t_status_table(fx, tmp):
+    print("\n[14c] Status per file and summary table (#14, #15)")
+    files = sv.gather([fx["dir"]], recursive=True)
+    calls = []
+    orig = sv.sniff
+    sv.sniff = lambda path, *a, **k: (calls.append(path), orig(path, *a, **k))[1]
+    try:
+        stats = []
+        res = sv.process_all(files, lang="en", log=quiet, status=stats.append, report=True)
+    finally:
+        sv.sniff = orig
+    check("one status line per file", len(stats) == len(files) == len(res), str(stats))
+    check("status lines numbered [i/n]",
+          all(st.startswith("[%d/%d] " % (i, len(files))) for i, st in enumerate(stats, 1)), str(stats))
+    check("status counts per type (DebugLog 1/2, DebugLog 2/2)",
+          any(" DebugLog 1/2: " in st for st in stats) and any(" DebugLog 2/2: " in st for st in stats)
+          and any(" GuideLog 1/1: " in st for st in stats), str(stats))
+    check("each file is sniffed only once", len(calls) == len(files), "%d vs %d" % (len(calls), len(files)))
+    tab = sv.results_table(res, "en")
+    head = tab[0]
+    check("table: header + rule + one row per file", len(tab) == 2 + len(files), "\n".join(tab))
+    col = head.index("File")
+    check("table: file names aligned under 'File'",
+          all(row[col:].startswith(os.path.basename(r["path"])) for row, r in zip(tab[2:], res)), "\n".join(tab))
+    end = head.index("Lines") + len("Lines")
+    check("table: numbers right-aligned under 'Lines'",
+          all(row[:end].rstrip() == row[:end] for row in tab[2:]), "\n".join(tab))
+    check("table: dry run rows marked", sum(row.endswith("dry run") for row in tab) == len(files) - 1,
+          "\n".join(tab))
+    unk = [row for row in tab[2:] if "notes.txt" in row][0]
+    check("table: unknown file without numbers", unk.split()[3:5] == ["-", "-"] and unk.endswith("unknown"), unk)
+    check("table: plain text only", all(ch.isprintable() for row in tab for ch in row))
+    out = os.path.join(tmp, "o_tab")
+    os.makedirs(out)
+    sv.process_all([fx["guide"]], log=quiet, status=quiet, out_dir=out)
+    again = sv.process_all([fx["guide"]], log=quiet, status=quiet, out_dir=out)
+    row = sv.results_table(again, "de")[2]
+    check("table DE: existing outputs -> 'existiert', no numbers",
+          row.endswith("existiert") and " 180 " not in row, row)
+    check("table DE: German headers", sv.results_table(again, "de")[0].split()[:4] == ["#", "Typ", "Datei", "Zeilen"],
+          sv.results_table(again, "de")[0])
 
 
 def t_progress_i18n(fx, tmp):
@@ -791,6 +839,9 @@ def t_menu(fx, tmp):
           "No window: tkinter missing in" in p.stdout and sys.executable in p.stdout, p.stdout[:300])
     check("menu: GPL notice at start (EN)",
           "ABSOLUTELY NO WARRANTY" in p.stdout and sv.COPYRIGHT in p.stdout, p.stdout[:300])
+    check("menu: status line and summary table",
+          "[1/1] GuideLog 1/1:" in p.stdout and re.search(r"^#\s+Type\s+File", p.stdout, re.M) is not None,
+          p.stdout[-600:])
     check("menu: clear prompt for categories", "Selection (e.g. 3 or 2,3)" in p.stdout, p.stdout[-300:])
     check("menu: final line with file count and duration", re.search(r"\(1 file, [\d.]+s\)", p.stdout) is not None,
           p.stdout[-200:])
@@ -899,6 +950,10 @@ res["src_files"] = sorted(os.listdir(os.path.dirname(src)))
 # output folder that is a file -> message, nothing written
 g.out.set(out_file); g.go(report=False); root.update()
 res["file_msg"] = g.text.get("1.0", "end").strip()
+# status line and table after a run with two files
+g.out.set(out_new); g.force.set(True); g.sel.set(os.path.dirname(src)); g.go(report=True); root.update()
+res["run_log"] = g.text.get("1.0", "end")
+res["run_status"] = g.status.get()
 root.destroy()
 print(json.dumps(res))
 '''
@@ -939,6 +994,12 @@ def _gui_layout_and_outdir(fx, tmp, env):
                              "GuideLog_2026-01-15_201500_phd2.txt"], str(r["out_files"]))
     check("output folder: nothing written next to the input",
           r["src_files"] == [os.path.basename(src)], str(r["src_files"]))
+    check("window: status line per file in the log",
+          "[1/1] GuideLog 1/1: GuideLog_2026-01-15_201500.txt" in r["run_log"], r["run_log"][:300])
+    check("window: summary table in the log",
+          re.search(r"^#\s+Typ\s+Datei\s+Zeilen", r["run_log"], re.M) is not None, r["run_log"][-500:])
+    check("window: status label shows the summary at the end",
+          re.match(r"\(1 Datei, [\d.]+s\)$", r["run_status"]) is not None, r["run_status"])
     check("output folder is a file: message, no run",
           r["file_msg"].startswith("Zielordner ist eine Datei:"), r["file_msg"][:200])
 
@@ -993,6 +1054,7 @@ def main():
         t_report(fx, tmp)
         t_version(fx, tmp)
         t_cli(fx, tmp)
+        t_status_table(fx, tmp)
         t_progress_i18n(fx, tmp)
         t_menu(fx, tmp)
         t_gui(fx, tmp)

@@ -41,7 +41,7 @@ import argparse
 #  Version / known-good markers
 # ----------------------------------------------------------------------------
 
-TOOL_VERSION = "1.1.0"
+TOOL_VERSION = "1.2.0"
 COPYRIGHT = "Copyright (C) 2026 ph3x"
 KNOWN_APP_VERSIONS = ("2.0.37",)      # GuideLog "Version:" values seen so far
 KNOWN_PROTOCOL = ("2",)               # GuideLog "Version protocol:" values
@@ -714,14 +714,15 @@ def _iter_raw(path, plain):
 
 def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
                  full_date=True, report=False, force=False, lang="en",
-                 progress=None, log=print):
-    """Decode (and optionally redact/convert) one file.  Returns a result dict."""
-    res = {"path": path, "kind": None, "outputs": [], "skipped": None,
+                 progress=None, log=print, sniffed=None):
+    """Decode (and optionally redact/convert) one file.  Returns a result dict.
+    sniffed: result of sniff(path) if the caller already has it."""
+    res = {"path": path, "kind": None, "outputs": [], "skipped": None, "report": report,
            "redactions": {c: 0 for c in CATEGORIES}, "warnings": [],
            "lines": 0, "uncertain": 0,
            "guide": {"sessions": 0, "steps": 0, "drops": 0}}
 
-    kind, plain = sniff(path)
+    kind, plain = sniffed or sniff(path)
     res["kind"] = kind
     if kind == "unknown":
         res["skipped"] = "unknown"
@@ -861,6 +862,64 @@ def _guard(path, force, log, lang):
 
 
 # ----------------------------------------------------------------------------
+#  Several files: status line per file and a summary table (issues #14, #15)
+# ----------------------------------------------------------------------------
+
+KIND_NAMES = {"guide": "GuideLog", "debug": "DebugLog", "glog": "glog", "unknown": "?"}
+
+
+def process_all(files, lang="en", log=print, status=None, progress_for=None, **kw):
+    """Process several files.  Before each file a status line like
+    "[2/5] DebugLog 1/2: name" goes to status(text) (default: log).
+    progress_for(path) may return a progress callback for that file.
+    Remaining keyword arguments go to process_file.  Returns the result dicts."""
+    import collections
+    status = status or log
+    sniffed = [(f, sniff(f)) for f in files]
+    total = collections.Counter(sn[0] for _, sn in sniffed)
+    seen = collections.Counter()
+    results = []
+    for i, (f, sn) in enumerate(sniffed, 1):
+        seen[sn[0]] += 1
+        status("[%d/%d] %s %d/%d: %s" % (i, len(files), KIND_NAMES[sn[0]], seen[sn[0]],
+                                         total[sn[0]], os.path.basename(f)))
+        _POS_CACHE.clear()
+        results.append(process_file(f, lang=lang, log=log, sniffed=sn,
+                                    progress=progress_for(f) if progress_for else None,
+                                    **kw))
+    return results
+
+
+def _result_state(r):
+    if r["skipped"] == "unknown":
+        return "unknown"
+    if r["report"]:
+        return "dry"
+    return "ok" if r["outputs"] else "skipped"
+
+
+def results_table(results, lang):
+    """Summary table, one row per file.  Plain text, monospace aligned."""
+    head = [_t(lang, "col_" + c) for c in ("no", "type", "file", "lines", "uncertain")]
+    head += [_t(lang, "col_" + c) for c in CATEGORIES] + [_t(lang, "col_state")]
+    rows = []
+    for i, r in enumerate(results, 1):
+        state = _result_state(r)
+        nums = [r["lines"], r["uncertain"]] + [r["redactions"][c] for c in CATEGORIES]
+        # nothing was (fully) processed -> no numbers rather than misleading ones
+        nums = ["-"] * len(nums) if state in ("skipped", "unknown") else [str(x) for x in nums]
+        rows.append([str(i), KIND_NAMES[r["kind"] or "unknown"], os.path.basename(r["path"])]
+                    + nums + [_t(lang, "state_" + state)])
+    width = [max(len(x[c]) for x in [head] + rows) for c in range(len(head))]
+    left = {1, 2, len(head) - 1}               # text columns; numbers right-aligned
+
+    def fmt(cells):
+        return "  ".join(c.ljust(w) if k in left else c.rjust(w)
+                         for k, (c, w) in enumerate(zip(cells, width))).rstrip()
+    return [fmt(head), fmt(["-" * w for w in width])] + [fmt(x) for x in rows]
+
+
+# ----------------------------------------------------------------------------
 #  Folder walking
 # ----------------------------------------------------------------------------
 
@@ -918,6 +977,20 @@ _STR = {
     "stat_lines": {"de": "Zeilen", "en": "lines"},
     "stat_uncertain": {"de": "unsichere Zeilen", "en": "uncertain lines"},
     "stat_guide": {"de": "Sessions/Schritte/Ausfälle", "en": "sessions/steps/drops"},
+    "col_no": {"de": "#", "en": "#"},
+    "col_type": {"de": "Typ", "en": "Type"},
+    "col_file": {"de": "Datei", "en": "File"},
+    "col_lines": {"de": "Zeilen", "en": "Lines"},
+    "col_uncertain": {"de": "unsicher", "en": "Uncertain"},
+    "col_state": {"de": "Status", "en": "Status"},
+    "col_hotspot": {"de": "WLAN", "en": "Wi-Fi"},      # short headers keep the table narrow
+    "col_network": {"de": "Netz", "en": "Net"},
+    "col_location": {"de": "Ort", "en": "Loc"},
+    "col_serial": {"de": "SerNr", "en": "Serial"},
+    "state_ok": {"de": "fertig", "en": "done"},
+    "state_dry": {"de": "Probelauf", "en": "dry run"},
+    "state_skipped": {"de": "existiert", "en": "exists"},
+    "state_unknown": {"de": "unbekannt", "en": "unknown"},
     "gpl_notice": {"de": "DecoVita v%s - %s\n"
                           "Dieses Programm kommt OHNE JEDE GEWÄHRLEISTUNG. Es ist freie "
                           "Software (GPL-3.0-or-later); Weitergabe unter deren Bedingungen "
@@ -1030,16 +1103,18 @@ def run_cli(a):
     enabled = enabled_from_args(a)
     warn_unredacted(enabled, a.lang, print)
     t0 = time.time()
-    n = 0
-    for f in files:
-        _POS_CACHE.clear()
-        prog = make_progress(a.lang) if os.path.getsize(f) > 20 * 1024 * 1024 else None
-        process_file(f, out_dir=a.out, enabled=enabled, make_phd2=a.phd2,
-                     full_date=a.full_date, report=a.report, force=a.force,
-                     lang=a.lang, progress=prog)
-        n += 1
-    print(_summary(n, time.time() - t0, a.lang))
+    res = process_all(files, lang=a.lang, progress_for=lambda f: _big_progress(f, a.lang),
+                      out_dir=a.out, enabled=enabled, make_phd2=a.phd2,
+                      full_date=a.full_date, report=a.report, force=a.force)
+    print()
+    print("\n".join(results_table(res, a.lang)))
+    print(_summary(len(res), time.time() - t0, a.lang))
     return 0
+
+
+def _big_progress(path, lang):
+    """Progress line on stderr, only for files larger than 20 MB."""
+    return make_progress(lang) if os.path.getsize(path) > 20 * 1024 * 1024 else None
 
 
 def make_progress(lang):
@@ -1092,11 +1167,11 @@ def run_menu(lang):
         return 1
     warn_unredacted(enabled, lang, print)
     t0 = time.time()
-    for f in files:
-        _POS_CACHE.clear()
-        prog = make_progress(lang) if os.path.getsize(f) > 20 * 1024 * 1024 else None
-        process_file(f, enabled=tuple(enabled), make_phd2=phd2, lang=lang, progress=prog)
-    print(_summary(len(files), time.time() - t0, lang))
+    res = process_all(files, lang=lang, progress_for=lambda f: _big_progress(f, lang),
+                      enabled=tuple(enabled), make_phd2=phd2)
+    print()
+    print("\n".join(results_table(res, lang)))
+    print(_summary(len(res), time.time() - t0, lang))
     return 0
 
 
@@ -1187,7 +1262,19 @@ def build_gui(root, lang):
                       command=lambda: go(report=False))
     b_run.pack(side="right")
     bar = ttk.Progressbar(root, maximum=100); bar.pack(side="bottom", fill="x", **pad)
-    txt = tk.Text(root, height=6); txt.pack(fill="both", expand=True, **pad)
+    stat = tk.StringVar()
+    tk.Label(root, textvariable=stat, anchor="w").pack(side="bottom", fill="x", **pad)
+    # log area: no line wrapping (the summary table is wider than the window),
+    # scrollbars instead
+    logf = tk.Frame(root); logf.pack(fill="both", expand=True, **pad)
+    logf.rowconfigure(0, weight=1); logf.columnconfigure(0, weight=1)
+    txt = tk.Text(logf, height=6, wrap="none")
+    txt.grid(row=0, column=0, sticky="nsew")
+    ysb = tk.Scrollbar(logf, orient="vertical", command=txt.yview)
+    ysb.grid(row=0, column=1, sticky="ns")
+    xsb = tk.Scrollbar(logf, orient="horizontal", command=txt.xview)
+    xsb.grid(row=1, column=0, sticky="ew")
+    txt.configure(yscrollcommand=ysb.set, xscrollcommand=xsb.set)
     txt.insert("end", gpl_notice(lang) + "\n")      # replaced by the log on the first run
 
     # Size from what the widgets actually need (fonts, display scaling), so nothing
@@ -1200,8 +1287,15 @@ def build_gui(root, lang):
     def logw(msg):
         txt.insert("end", msg + "\n"); txt.see("end"); root.update_idletasks()
 
+    cur = {"text": ""}
+
+    def status(text):
+        cur["text"] = text
+        stat.set(text); logw(text)
+
     def prog(done, total, lines):
         bar["value"] = 100.0 * done / total if total else 0
+        stat.set("%s  (%d %s)" % (cur["text"], lines, _t(lang, "stat_lines")))
         root.update_idletasks()
 
     def go(report=False):
@@ -1213,16 +1307,21 @@ def build_gui(root, lang):
         if out and os.path.exists(out) and not os.path.isdir(out):
             logw(_t(lang, "bad_outdir") % out); return
         enabled = tuple(c for c in CATEGORIES if cvars[c].get())
+        t_start = time.time()
         files = gather([p], v_rec.get())
         if not files:
             logw(_t(lang, "no_files")); return
         warn_unredacted(enabled, lang, logw)
-        for f in files:
-            _POS_CACHE.clear()
-            process_file(f, out_dir=out, enabled=enabled, make_phd2=v_phd2.get(),
-                         full_date=v_date.get(), report=report, force=v_force.get(),
-                         lang=lang, progress=prog, log=logw)
+        bar["value"] = 0
+        res = process_all(files, lang=lang, log=logw, status=status,
+                          progress_for=lambda f: prog, out_dir=out, enabled=enabled,
+                          make_phd2=v_phd2.get(), full_date=v_date.get(), report=report,
+                          force=v_force.get())
+        logw("")
+        for line in results_table(res, lang):
+            logw(line)
         bar["value"] = 100
+        stat.set(_summary(len(res), time.time() - t_start, lang))
 
     def all_widgets():
         """Every non-container widget in the window (for layout checks)."""
@@ -1236,7 +1335,7 @@ def build_gui(root, lang):
                 out.append(w)
         return out
 
-    return types.SimpleNamespace(root=root, sel=sel, out=outv, ent_src=ent_src,
+    return types.SimpleNamespace(root=root, sel=sel, out=outv, status=stat, ent_src=ent_src,
                                  ent_out=ent_out, rec=v_rec, phd2=v_phd2,
                                  date=v_date, force=v_force, cats=cvars, text=txt,
                                  bar=bar, btn_dry=b_dry, btn_run=b_run, go=go,
