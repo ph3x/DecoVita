@@ -655,6 +655,34 @@ def t_files(fx, tmp):
     check(".glog: content kept (nothing to redact)", body(rg["outputs"][0]) == GLOG_PLAIN)
     check(".glog: header with redaction note",
           open(rg["outputs"][0], encoding="utf-8").readline().startswith("# "))
+    # #17: without redaction the .glog must not be called _redacted
+    out_nr = os.path.join(tmp, "o_glog_nr")
+    rn = sv.process_file(fx["glog"], out_dir=out_nr, enabled=(), log=quiet)
+    check(".glog with --no-redact -> _plain.glog",
+          [os.path.basename(p) for p in rn["outputs"]] == ["libtoupcam_latest_plain.glog"],
+          str([os.path.basename(p) for p in rn["outputs"]]))
+    check(".glog with --no-redact: content unchanged", body(rn["outputs"][0]) == GLOG_PLAIN)
+    rpart = sv.process_file(fx["glog"], out_dir=os.path.join(tmp, "o_glog_part"),
+                            enabled=("network",), log=quiet)
+    check(".glog with some categories -> still _redacted.glog",
+          [os.path.basename(p) for p in rpart["outputs"]] == ["libtoupcam_latest_redacted.glog"])
+    check("_plain.glog counts as our own output", sv.is_our_output(rn["outputs"][0]))
+    # folder mode must not read the _plain output back in as input
+    fold = os.path.join(tmp, "glog_fold")
+    os.makedirs(fold)
+    shutil.copy(fx["glog"], fold)
+    shutil.copy(rn["outputs"][0], fold)
+    got = sorted(os.path.basename(f) for f in sv.gather([fold], recursive=False))
+    check("folder: _plain.glog output is skipped", got == ["libtoupcam_latest.glog"], str(got))
+    sv.process_all(sv.gather([fold], recursive=False), enabled=(), log=quiet)
+    check("folder run: no _plain_plain.glog", sorted(os.listdir(fold)) ==
+          ["libtoupcam_latest.glog", "libtoupcam_latest_plain.glog"], str(sorted(os.listdir(fold))))
+    gi = open(os.path.join(HERE, ".gitignore"), encoding="utf-8").read().split()
+    check(".gitignore covers every output suffix",
+          all(("*%s*" % s) in gi or ("*%s.txt" % s) in gi for s in sv.OUT_SUFFIXES), str(gi))
+    for rd in ("README.md", "README.de.md"):
+        txt = open(os.path.join(HERE, rd), encoding="utf-8").read()
+        check("%s names the _plain.glog output" % rd, "_plain.glog" in txt)
     for o in r["outputs"]:
         check("header in %s" % os.path.basename(o), open(o, encoding="utf-8").readline().startswith("# "))
     after = {k: sha(fx[k]) for k in ("guide", "debug", "glog")}

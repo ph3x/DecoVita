@@ -42,7 +42,7 @@ Nützliche Schalter:
 |---|---|
 | GuideLog | `<Name>_decoded.txt` und `<Name>_phd2.txt` |
 | DebugLog | `<Name>_decoded.txt` (Zeitstempel mit vollem Datum) |
-| `.glog` | `<Name>_redacted.glog` |
+| `.glog` | `<Name>_redacted.glog` (`<Name>_plain.glog` mit `--no-redact`) |
 
 Die Ausgaben landen neben der Eingabe oder in einem Zielordner (`-o` in der
 Kommandozeile, "Zielordner" im Fenster; wird bei Bedarf angelegt). Die

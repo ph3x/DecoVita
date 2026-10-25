@@ -46,7 +46,7 @@ COPYRIGHT = "Copyright (C) 2026 ph3x"
 KNOWN_APP_VERSIONS = ("2.0.37",)      # GuideLog "Version:" values seen so far
 KNOWN_PROTOCOL = ("2",)               # GuideLog "Version protocol:" values
 
-OUT_SUFFIXES = ("_decoded", "_phd2", "_redacted")
+OUT_SUFFIXES = ("_decoded", "_phd2", "_redacted", "_plain")
 
 # ----------------------------------------------------------------------------
 #  Cipher core
@@ -784,7 +784,9 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
             res["redactions"] = dict(red.counts)
             _log_report(res, lang, log)
             return res
-        out = os.path.join(outdir, stem + "_redacted.glog")
+        # the suffix tells whether redaction ran (#17)
+        suffix = "_redacted" if enabled else "_plain"
+        out = os.path.join(outdir, stem + suffix + ".glog")
         if _guard(out, force, log, lang):
             with open(out, "w", encoding="utf-8") as o:
                 o.write(_redaction_header(enabled, lang))

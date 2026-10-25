@@ -42,7 +42,7 @@ Useful switches:
 |---|---|
 | GuideLog | `<name>_decoded.txt` and `<name>_phd2.txt` |
 | DebugLog | `<name>_decoded.txt` (timestamps with full date) |
-| `.glog` | `<name>_redacted.glog` |
+| `.glog` | `<name>_redacted.glog` (`<name>_plain.glog` with `--no-redact`) |
 
 The outputs are written next to the input, or into an output folder (`-o` on the
 command line, "Output folder" in the window; created if missing).
