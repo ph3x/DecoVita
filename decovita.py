@@ -9,10 +9,12 @@ This is an unofficial community tool. It has no connection to ToupTek Astro.
 
 What it does
   * decodes the obfuscated GuideLog_*.txt / DebugLog_*.txt files into readable text
-  * optionally redacts personal data (Wi-Fi names/passwords, IP addresses,
-    location, serial numbers) - on by default, each category switchable
+  * optionally redacts personal data (Wi-Fi names/passwords, IP and MAC
+    addresses, location, serial numbers) - on by default, each category switchable
   * for GuideLogs it also writes a PHD2-format file that phdlogview can open
   * reads cleartext libtoupcam *.glog files (redact only)
+  * decodes the phone app logs Logs_App_*.txt (non-ASCII characters do not
+    advance the position, and the text is double-encoded UTF-8)
 
 The decoding scheme was worked out from the files themselves, not from any
 documentation.  Per line, only the printable characters 33..126 are used:
@@ -111,6 +113,45 @@ def encode_line(text, t0):
     return bytes(out)
 
 
+# ---- phone app logs (Logs_App_*.txt, issue #18) -------------------------------
+# Same cipher, but bytes >= 0x80 pass through and do NOT advance the position j,
+# and the text is double-encoded UTF-8 (each byte of the original UTF-8 text was
+# written again as its own UTF-8 character).
+
+def _undo_double_utf8(bs):
+    try:
+        s = bs.decode("utf-8")
+    except UnicodeDecodeError:
+        return bs.decode("latin1")
+    try:
+        return s.encode("latin1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return s
+
+
+def decode_app_line(raw, t0):
+    """Decode one raw phone-app log line with line key t0 -> str."""
+    if not raw:
+        return ""
+    if raw.isascii():
+        return decode_line(raw, t0)
+    asc = iter(decode_line(bytes(b for b in raw if b < 0x80), t0).encode("latin1"))
+    return _undo_double_utf8(bytes(next(asc) if b < 0x80 else b for b in raw))
+
+
+def encode_app_line(text, t0):
+    """Inverse of decode_app_line.  For test vectors."""
+    moj = text.encode("utf-8").decode("latin1")          # the double encoding
+    asc = iter(encode_line("".join(c for c in moj if ord(c) < 0x80), t0))
+    out = bytearray()
+    for c in moj:
+        if ord(c) < 0x80:
+            out.append(next(asc))
+        else:
+            out += c.encode("utf-8")
+    return bytes(out)
+
+
 TS = re.compile(r'(\[\d\d:\d\d:\d\d\.\d{3}\]|\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)')
 
 
@@ -123,14 +164,15 @@ def t0_candidates(c0, first):
     return (s + 1,)
 
 
-def try_known(raw):
-    """Fast path: recover a timestamped line from its known first character."""
+def try_known(raw, dec=decode_line):
+    """Fast path: recover a timestamped line from its known first character.
+    dec: decode_line (device logs) or decode_app_line (phone app logs)."""
     if not raw:
         return ""
     c0 = raw[0]
     for f in (0x5B, 0x32):               # '[' (DebugLog) or '2' (date lines)
         for t0 in t0_candidates(c0, f):
-            d = decode_line(raw, t0)
+            d = dec(raw, t0)
             if TS.match(d):
                 return d
     return None
@@ -183,7 +225,7 @@ def _build_model(texts):
 _MODEL = _build_model([_SEED])
 
 
-def train_model(path):
+def train_model(path, dec=decode_line):
     """Seed + bigrams from the first anchored (timestamped) lines of this file.
     Reads at most _TRAIN_LINES lines; the file is still processed line by line."""
     sample = []
@@ -191,7 +233,7 @@ def train_model(path):
         for i, ln in enumerate(f):
             if i >= _TRAIN_LINES:
                 break
-            d = try_known(ln.rstrip(b"\r\n"))
+            d = try_known(ln.rstrip(b"\r\n"), dec)
             if d:
                 sample.append(d)
     return _build_model(sample + [_SEED])
@@ -216,19 +258,19 @@ def _score(d, mdl=None):
 UNCERTAIN_MARGIN = 25.0     # score gap below which a guessed line counts as uncertain
 
 
-def recover(raw, mdl=None):
+def recover(raw, mdl=None, dec=decode_line):
     """Decode one line -> (text, anchored, margin).
     anchored=True: key derived from the known first character (certain).
     anchored=False: key guessed by scoring; margin = gap to the runner-up."""
     if not raw:
         return "", True, 0.0
-    d = try_known(raw)
+    d = try_known(raw, dec)
     if d is not None:
         return d, True, 0.0
     best = None
     best_s = second = None
     for t0 in range(95):
-        d = decode_line(raw, t0)
+        d = dec(raw, t0)
         s = _score(d, mdl)
         if best_s is None or s > best_s:
             second, best_s, best = best_s, s, d
@@ -246,10 +288,12 @@ _MK_GUIDE = ("Guiding Begins", "Calibration Step->", "Frame,Time,mount",
              "Log begin at", "Guiding Step->")
 _MK_DEBUG = ("CoreServer", "ScopeINDI", "-> Number (", "received Property")
 _MK_GLOG = ("libtoupcam", "EnumLibusb", "sdk: lib")
+_MK_APP = ("logCallback: [CoreClient]", "SkyMapActivity", "LocationUtil",
+           "RecordWifiTrace", "MainCameraActivity", "TpSkyMapHandler")
 
 
 def sniff(path, sample_lines=400):
-    """Return (kind, already_plain).  kind in guide/debug/glog/unknown."""
+    """Return (kind, already_plain).  kind in guide/debug/glog/app/unknown."""
     raw = []
     with open(path, "rb") as f:
         for i, ln in enumerate(f):
@@ -259,6 +303,8 @@ def sniff(path, sample_lines=400):
     text_raw = b"\n".join(raw).decode("latin1", "replace")
     if "libtoupcam" in text_raw or "EnumLibusb" in text_raw:
         return "glog", True
+    if any(m in text_raw for m in _MK_APP):
+        return "app", True
     if any(m in text_raw for m in _MK_DEBUG):
         return "debug", True
     if any(m in text_raw for m in _MK_GUIDE):
@@ -267,6 +313,8 @@ def sniff(path, sample_lines=400):
     dec = "\n".join(recover(l)[0] for l in raw[:120] if l)
     if "libtoupcam" in dec:
         return "glog", False
+    if any(m in dec for m in _MK_APP):
+        return "app", False
     if any(m in dec for m in _MK_DEBUG):
         return "debug", False
     if any(m in dec for m in _MK_GUIDE):
@@ -334,6 +382,31 @@ _RE_CONFIG = re.compile(r'^Config:\s*(\S+)')
 _RE_CURRENT = re.compile(r'^(\s*(?:Current|Default|Choices)\s*:\s*)(.*)$')
 _RE_FIELD = re.compile(r'^\s*(?:Label|Type|Readonly|Printable|Info|Bottom|Top|Step)\s*:')
 
+# phone app logs (issue #18): free-text formats seen in real app logs
+_RE_APP_SSID = (
+    re.compile(r'(\b(?:ssid|previousSsid)=)([^,]+)(,)'),
+    re.compile(r'((?:lastWifiName|curWifi|curBoxWifi):)(?!--cur)(.+?)((?=--cur)|$)'),
+    re.compile(r'(Wi-Fi name: )(?! mIsBoxConnected:)(.+?)( mIsBoxConnected:|$)'),
+    re.compile(r'(Wi-Fi bridge=====)(?!-(?:true|false)-)(.+?)(-(?:true|false)-)'),
+    re.compile(r'((?<!B)SSID: )([^,]+)(,)'),
+)
+_SSID_NONE = frozenset(("null", "<unknown ssid>"))   # placeholders, not SSIDs
+_RE_ANY_IP = re.compile(r'(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?!\.?\d)')
+_RE_MAC = re.compile(r'(?<![0-9A-Fa-f:])[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}(?![0-9A-Fa-f:])')
+_MAC_KEEP = frozenset(("02:00:00:00:00:00", "00:00:00:00:00:00"))   # Android placeholders
+_RE_APP_LATLON = (
+    re.compile(r'(longitude and latitude: )(-?\d+(?:\.\d+)?)(,)(-?\d+(?:\.\d+)?)'),
+    re.compile(r'(longitude-time\d* -?\d+-----)(-?\d+(?:\.\d+)?)( latitude )(-?\d+(?:\.\d+)?)'),
+    re.compile(r'(TimeZoneHourOffset \[[^\]]*\]\s+-?[\d.]+---)(-?\d+(?:\.\d+)?)(---)(-?\d+(?:\.\d+)?)'),
+)
+_RE_APP_ALT = re.compile(r'(\b(?:alt|mslAlt)=)(-?\d+(?:\.\d+)?)')
+
+
+def _private_ip(o1, o2):
+    return (o1 == 10 or (o1 == 172 and 16 <= o2 <= 31) or (o1 == 192 and o2 == 168)
+            or (o1 == 169 and o2 == 254) or (o1 == 100 and 64 <= o2 <= 127))
+
+
 _LOC_BLANK = frozenset((
     "ALT", "AZ", "LST", "ELEV",
     "SYNCPOLARALIGN_ALT", "SYNCPOLARALIGN_AZ",
@@ -353,11 +426,13 @@ def _valid_ip(*octs):
 
 class Redactor:
     """Streaming, stateful redactor.  feed(line)->line, counters in .counts."""
-    def __init__(self, enabled):
+    def __init__(self, enabled, app=False):
         self.en = {c: (c in enabled) for c in CATEGORIES}
         self.counts = {c: 0 for c in CATEGORIES}
+        self.app = app              # phone app log: extra free-text rules
         self.ssid_map = {}          # value -> token
         self.net_map = {}           # (o1,o2,o3) -> token
+        self.mac_map = {}           # MAC (lower case) -> token
         self._cfg_sensitive = False
 
     # -- helpers ---------------------------------------------------------
@@ -374,6 +449,14 @@ class Redactor:
         if tok is None:
             tok = "N%d" % (len(self.net_map) + 1)
             self.net_map[key] = tok
+        return tok
+
+    def _mac_token(self, val):
+        key = val.lower()
+        tok = self.mac_map.get(key)
+        if tok is None:
+            tok = "<MAC_%d>" % (len(self.mac_map) + 1)
+            self.mac_map[key] = tok
         return tok
 
     # -- category passes -------------------------------------------------
@@ -482,8 +565,54 @@ class Redactor:
             line = _RE_SERIAL_JSON_NUM.sub(sjn, line)
         return line
 
+    def _do_app(self, line):
+        """Phone app log rules (issue #18).  Runs before the generic passes, so
+        SSIDs learned here are also replaced as stray occurrences."""
+        if self.en["hotspot"] and ("ssid" in line.lower() or "Wifi" in line
+                                   or "Wi-Fi" in line):
+            def ssid(m):
+                if m.group(2) in _SSID_NONE:
+                    return m.group(0)
+                self.counts["hotspot"] += 1
+                return m.group(1) + self._ssid_token(m.group(2)) + m.group(3)
+            for rx in _RE_APP_SSID:
+                line = rx.sub(ssid, line)
+        if self.en["network"]:
+            if ":" in line:
+                def mac(m):
+                    if m.group(0) in _MAC_KEEP:
+                        return m.group(0)
+                    self.counts["network"] += 1
+                    return self._mac_token(m.group(0))
+                line = _RE_MAC.sub(mac, line)
+            if "." in line:
+                def ip(m):
+                    o = [int(x) for x in m.groups()]
+                    if max(o) > 255 or not _private_ip(o[0], o[1]):
+                        return m.group(0)
+                    self.counts["network"] += 1
+                    tok = self._net_token(*m.groups()[:3])
+                    return "%s.%s.<%s>.%s" % (m.group(1), m.group(2), tok, m.group(4))
+                line = _RE_ANY_IP.sub(ip, line)
+        if self.en["location"]:
+            if "latitude" in line or "TimeZoneHourOffset" in line:
+                def ll(m):
+                    self.counts["location"] += 2
+                    return (m.group(1) + _round1(m.group(2)) + m.group(3)
+                            + _round1(m.group(4)))
+                for rx in _RE_APP_LATLON:
+                    line = rx.sub(ll, line)
+            if "Location[" in line:
+                def alt(m):
+                    self.counts["location"] += 1
+                    return m.group(1) + REDACTED
+                line = _RE_APP_ALT.sub(alt, line)
+        return line
+
     # -- public ----------------------------------------------------------
     def feed(self, line):
+        if self.app:
+            line = self._do_app(line)
         low = line.lower()
         # serial first (stateful on Config/Current lines)
         if self.en["serial"] and (self._cfg_sensitive or line.startswith("Config:")
@@ -502,7 +631,7 @@ class Redactor:
                 line = self._stray_ssids(line)
         return line
 
-    _TOKEN_SPLIT = re.compile(r'(<SSID_\d+>|<REDACTED>|<N\d+>)')
+    _TOKEN_SPLIT = re.compile(r'(<SSID_\d+>|<REDACTED>|<N\d+>|<MAC_\d+>)')
 
     def _stray_ssids(self, line):
         """Replace known SSIDs that appear outside SSID fields (longest first,
@@ -734,7 +863,7 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
     outdir = out_dir or os.path.dirname(os.path.abspath(path))
     if not report:
         os.makedirs(outdir, exist_ok=True)
-    red = Redactor(enabled)
+    red = Redactor(enabled, app=(kind == "app"))
 
     # --- GuideLog: buffer (small), decode, redact, convert ---------------
     if kind == "guide":
@@ -796,9 +925,11 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
         _log_done(res, lang, log)
         return res
 
-    # --- DebugLog: stream (large) ---------------------------------------
+    # --- DebugLog / phone app log: stream (large) -------------------------
+    app = kind == "app"
+    dec = decode_app_line if app else decode_line
     dater = None
-    if full_date:
+    if full_date and not app:          # app log lines already carry a full date
         dnm = date_from_name(path)
         if dnm:
             dater = DebugDater(dnm)
@@ -813,13 +944,15 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
         if o:
             o.write(_redaction_header(enabled, lang))
         done = 0
-        mdl = None if plain else train_model(path)
+        mdl = None if plain else train_model(path, dec)
         for rawl in _iter_raw(path, plain):
             done += len(rawl) + 1
             if plain:
-                d, anchored, margin = rawl.decode("latin1"), True, 0.0
+                # our own app output is proper UTF-8; device logs are ASCII
+                d = rawl.decode("utf-8", "replace") if app else rawl.decode("latin1")
+                anchored, margin = True, 0.0
             else:
-                d, anchored, margin = recover(rawl, mdl)
+                d, anchored, margin = recover(rawl, mdl, dec)
             res["lines"] += 1
             if not anchored and margin < UNCERTAIN_MARGIN:
                 res["uncertain"] += 1
@@ -867,7 +1000,8 @@ def _guard(path, force, log, lang):
 #  Several files: status line per file and a summary table (issues #14, #15)
 # ----------------------------------------------------------------------------
 
-KIND_NAMES = {"guide": "GuideLog", "debug": "DebugLog", "glog": "glog", "unknown": "?"}
+KIND_NAMES = {"guide": "GuideLog", "debug": "DebugLog", "glog": "glog", "app": "AppLog",
+              "unknown": "?"}
 
 
 def process_all(files, lang="en", log=print, status=None, progress_for=None, **kw):

@@ -61,7 +61,7 @@ without tkinter or Xvfb those tests are reported as SKIP, not FAIL.
   without the maintainer's go-ahead. If something you need is not reachable (a
   repository, a secret, a tool, real logs), say exactly what is missing and stop; do not
   mock, substitute or guess.
-- **Never commit logs or tool outputs** (`GuideLog_*`, `DebugLog_*`, `*.glog`,
+- **Never commit logs or tool outputs** (`GuideLog_*`, `DebugLog_*`, `Logs_App_*`, `*.glog`,
   `*_decoded.txt`, `*_phd2.txt`, `*_redacted*`, `*_plain*`).
 - No third-party dependencies. numpy was benchmarked and is **4x slower** than the
   pure-Python lookup-table approach; do not reintroduce it.
@@ -78,13 +78,15 @@ without tkinter or Xvfb those tests are reported as SKIP, not FAIL.
 ## Architecture of `decovita.py`
 
 - **Cipher core:** `decode_line`, `encode_line` (inverse, used for test vectors),
+  `decode_app_line`/`encode_app_line` (phone app variant),
   `t0_candidates`, `try_known`, `recover`, `train_model`, `_score`.
-- **File type detection:** `sniff(path)` -> (`guide`|`debug`|`glog`|`unknown`,
+- **File type detection:** `sniff(path)` -> (`guide`|`debug`|`glog`|`app`|`unknown`,
   already_plain).
 - **DebugLog dates:** `DebugDater` adds a full date from the filename and handles
   midnight rollover.
 - **Redaction:** `Redactor` is streaming and stateful, with one method per category:
-  `_do_hotspot`, `_do_network`, `_do_location`, `_do_serial`, plus `_stray_ssids`.
+  `_do_hotspot`, `_do_network`, `_do_location`, `_do_serial`, plus `_stray_ssids`;
+  `Redactor(enabled, app=True)` adds `_do_app` (app-log formats, MAC -> `<MAC_n>`).
 - **PHD2 conversion:** `convert_to_phd2(lines, stats)`.
 - **Orchestration:** `process_file(...)` (one file), `process_all(files, ...)` (several
   files: sniffs each once, emits a status line `[i/n] <Type> j/m: <name>` per file,
@@ -177,16 +179,34 @@ PHD2-like, but with StellaVita-specific lines:
 - **Source paths:** ToupTek's own build paths appear in error lines. These are not
   user data.
 
-### Phone app log (`Logs_App_YYYYMMDDhhmmss.txt`, not supported yet, #18)
+### Phone app log (`Logs_App_YYYYMMDDhhmmss.txt`, kind `app`, #18)
 
-Analysed 2026-10-18 (counts only). Same per-line cipher, but:
+Analysed 2026-10-18 and 2026-10-25 on 8 real app logs (counts only). Same per-line
+cipher, but:
 - **Non-ASCII bytes pass through and do not advance the position counter** `j`
-  (verified: only this model gives a number before every `℃`).
-- **Double-encoded UTF-8:** after decoding, `text.encode("latin1").decode("utf-8")`.
-- Lines: `YYYY-MM-DD hh:mm:ss | <Tag> ...` (anchored by `TS`); lines without timestamp
-  are mostly tab-indented stack traces.
-- Contains Wi-Fi passwords (`password`, `wifi_password`), SSIDs, IPv4, MAC addresses,
-  location (`LocationUtil`), possibly account/token keys and phone model.
+  (`decode_app_line`; verified: only this model gives a number before every `℃`, and
+  every non-ASCII line anchors on its timestamp).
+- **Double-encoded UTF-8:** the raw bytes are valid UTF-8 of characters U+0080..U+00FF;
+  after decoding, `bytes.decode("utf-8").encode("latin1").decode("utf-8")`.
+- Lines: `YYYY-MM-DD hh:mm:ss | <Tag> ...` (anchored by `TS`). Lines without timestamp
+  are tab-indented stack traces and version blocks (`TP version:…`); the leading tab
+  is a constant shift, so brute force handles them. No date handling needed.
+- One line can contain NUL bytes (`Bridge IP: \0\0…`); they pass through.
+- Personal data and formats (all covered by `Redactor._do_app`, active only for
+  `app`): JSON SSIDs/passwords (existing rules); free-text SSIDs `ssid=`,
+  `previousSsid=`, `lastWifiName:/curWifi:/curBoxWifi:` (separator `--cur`),
+  `Wi-Fi name: `, `Wi-Fi bridge=====<v>-true-`; Android `TransportInfo` with
+  `<unknown ssid>` and `02:00:00:00:00:00` placeholders (kept); `bssid=` MACs; about
+  30 free-text IPv4 formats (so: every private IPv4, public ones stay, e.g. the OTA
+  server); lat/lon in JSON, `Update longitude and latitude: a,b`,
+  `Data1 longitude-time1 n-----lon latitude lat-=---…`,
+  `…TimeZoneHourOffset [y, m, d, h, m, s]   tz---lon---lat`; GPS `alt=`/`mslAlt=` in
+  `bestLocation Location[…]` (Android already masks lat/lon there).
+- **Not personal (checked):** `generateKey ToupTek#Server#…` (cache keys),
+  `…VersionKey`/`latestToupSdkKey` (versions), `/data/user/0/…` (app path),
+  `deviceId=` (Android input device), `sessionId=` (stream number). No account,
+  token, e-mail, IMEI or Android-ID fields exist. Phone model / Android version stay
+  (maintainer decision). Wi-Fi names `null` / empty are placeholders, not SSIDs.
 
 ### libtoupcam `.glog`
 

@@ -269,6 +269,95 @@ GLOG_PLAIN = [
 ]
 
 
+# Phone app log (Logs_App_*.txt, #18).  Every line mirrors a real app-log line
+# format; all values are invented.
+APP_FAKE = {
+    "mac": "de:ad:be:ef:00:01", "ip_phone": "192.168.77.105", "ip_box": "10.0.42.1",
+    "lat7": "12.3456789", "lon7": "23.4567891", "alt": "345.67890123", "msl": "298.7654321",
+    "model": "FAKE-MODEL1",
+}
+
+
+def app_plain():
+    F, A = FAKE, APP_FAKE
+    L = []
+
+    def a(text, ts="2026-01-15 20:15:%02d"):
+        L.append((ts % (len(L) % 60)) + " | " + text if ts else text)
+    a("SplashActivity onCreate, isAppRestart=true, isSplashActivity=true, localeBeforeSuper=eLanguage_DE")
+    a("BoxConnectionService loadBridgeHost" + F["ip_dev"])
+    a("BoxDeviceManager Bridge IP: " + F["ip_dev"])
+    a("tryConnectNew: trying cached discovery address " + F["ip_dev"])
+    a("logCallback: [CoreClient] connect %s:4700 failed" % F["ip_other"])
+    a('logCallback: [CoreClient][RES] {"id":5,"command_type":"CMD_GLOBAL_GET_BRIDGE_WIFI_STATUS":{"is_connected":true,'
+      '"ssid":"%s","ip":"%s","subnet_mask":"255.255.255.0","gateway":"%s"}}' % (F["ssid_short"], F["ip_dev"], F["ip_gw"]))
+    a('logCallback: [CoreClient][RES] {"id":6,"command_type":"CMD_GLOBAL_GET_WIFI":{"ssid":"%s","password":"%s"}}'
+      % (F["ssid_long"], F["password"]))
+    a("RecordWifiTrace wifi connected ssid=%s, bssid=%s, previousBssid=%s, frequency=5180"
+      % (F["ssid_short"], A["mac"], A["mac"]))
+    a("RecordWifiTrace NETWORK_STATE_CHANGED state=CONNECTED, previousSsid=%s, previousBssid=%s"
+      % (F["ssid_short"], A["mac"]))
+    a("RecordWifiTrace networkCallback onCapabilitiesChanged network=123, capabilities=[ Transports: WIFI "
+      "Capabilities: NOT_METERED&INTERNET&NOT_RESTRICTED LinkUpBandwidth>=12000Kbps LinkDnBandwidth>=30000Kbps "
+      "TransportInfo: <SSID: <unknown ssid>, BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00, IP: /%s, "
+      "Security type: 2, Supplicant state: COMPLETED, Wi-Fi standard: 11ax, RSSI: -55, Link speed: 573Mbps]"
+      % A["ip_phone"])
+    a("lastWifiName:--curWifi:%s--curBoxWifi:%s" % (F["ssid_short"], F["ssid_long"]))
+    a("lastWifiName:--curWifi:--curBoxWifi:" + F["ssid_long"])
+    a("StellaVitaFragment Wi-Fi bridge=====%s-true--true-----false" % F["ssid_short"])
+    a("StellaVitaFragment Wi-Fi bridge=====-false--false-----false")
+    a("StellaVitaFragment Wi-Fi bridge=====null-false--false-----false")
+    a("Update Wi-Fi name: %s mIsBoxConnected:true" % F["ssid_short"])
+    a("Update Wi-Fi name:  mIsBoxConnected:false")
+    a("Mount test switch enable state, mIsBoxConnected:true selected device:EQMod Mount")
+    a("RecordWifiTrace wifi connected ssid=FAKE_CAFE_NET, bssid=02:00:00:00:00:00, previousBssid=, frequency=2412")
+    a("LegacyProtocolConnection socket error and connect lost: failed to connect to /%s (port 4700) "
+      "from /%s (port 41234) after 3000ms" % (A["ip_box"], A["ip_phone"]))
+    a("OTA server final address: http://203.0.113.10:8080/firmware/  local path: "
+      "/data/user/0/com.touptek.astrostation/files")
+    a('logCallback: [CoreClient][RES] {"id":7,"command_type":"CMD_GLOBAL_GET_DATA_BUNDLE":{"tp_sdk_version":'
+      '"60.32549.20260908","poaefw_sdk_version":"1.2.3.0","wifi_ssid":"%s","wifi_password":"%s"}}'
+      % (F["ssid_long"], F["password"]))
+    a('logCallback: [CoreClient][REQ] {"id":8,"command_type":"CMD_GLOBAL_REPORT_INFO":{"info":"ip:%s AppInfo : '
+      'versionName1.2.34 versionCode:56  DeviceInfo : brand:FAKEBRAND manufacturer:FAKEBRAND model:%s '
+      'device:FAKEDEV product:FAKEPROD hardware:qcom board:FAKEB androidVersion:15 apiLevel:35 '
+      'securityPatch:2026-01-01 pid:12345 builddate: 1.0.12.20260101"}}' % (A["ip_phone"], A["model"]))
+    a('logCallback: [CoreClient][RES] {"id":123,"command_type":"CMD_MOUNT_GET_LOCATION":{"longitude":%s,"latitude":%s}}'
+      % (F["lon_json"], F["lat_json"]))
+    a("Data1 longitude-time1 0-----%s latitude %s-=---4.2----19.150000000000002" % (A["lon7"], A["lat7"]))
+    a("BrokenLineView drawTwilightBackgroundutcTimeZoneHourOffset [2026, 1, 15, 20, 15, 30]   1.0---%s---%s"
+      % (A["lon7"], A["lat7"]))
+    a("Update longitude and latitude: %s,%s" % (A["lon7"], A["lat7"]))
+    a("bestLocation Location[gps 12******,23****** hAcc=12.345 et=+1d2h3m4s567ms alt=%s vAcc=1.5 mslAlt=%s "
+      "mslAltAcc=2.0 vel=0.0 bear=0.0 {Bundle[{satellites=0, maxCn0=0, QUICKGPS=true, HDACC=0.0, "
+      "SourceType=128, meanCn0=0, loc_type=1}]}]gps:[passive, network, fused, gps]" % (A["alt"], A["msl"]))
+    a("bestLocation 12.345nullprovider:network")
+    a("相机温度初始：-5,0℃")
+    a("相机温度替换后：-5.0℃")
+    a("latestToupSdkKey：1.2.34 version:60.32549.20260908")
+    a("MainCameraActivity 相机 connected, temperature -5.0℃ ok")
+    a("generateKey ToupTek#Server#sd#sequence 1")
+    a("java.lang.NullPointerException: Attempt to invoke virtual method 'int android.graphics.Bitmap.getWidth()' "
+      "on a null object reference")
+    a("\tat com.touptek.astrostation.ui.FakeView.onDraw(FakeView.java:123)", ts=None)
+    a("\tat android.view.View.draw(View.java:24512)", ts=None)
+    a("patch version:1", ts=None)
+    a("poaeFw version:1.2.3.0", ts=None)
+    a("")
+    rnd = random.Random(8)
+    for i in range(300):
+        a('logCallback: [CoreClient][EVT] {"event_type":"EVT_GUIDE_GRAPH":{"rms_ra":%.6f,"rms_dec":%.6f}}'
+          % (rnd.uniform(0, 2), rnd.uniform(0, 2)))
+        if i % 3 == 0:
+            a("SkyMapActivity onSensorChanged azimuth view update %d" % i)
+    return L
+
+
+def encrypt_app_lines(lines, seed):
+    rnd = random.Random(seed)
+    return b"\n".join(sv.encode_app_line(l, rnd.randint(0, 94)) for l in lines) + b"\n"
+
+
 def encrypt_lines(lines, seed):
     rnd = random.Random(seed)
     return b"\n".join(sv.encode_line(l, rnd.randint(0, 94)) for l in lines) + b"\n"
@@ -1032,6 +1121,115 @@ def _gui_layout_and_outdir(fx, tmp, env):
           r["file_msg"].startswith("Zielordner ist eine Datei:"), r["file_msg"][:200])
 
 
+def t_app(fx, tmp):
+    print("\n[18] Phone app logs (Logs_App_*.txt, #18)")
+    F, A = FAKE, APP_FAKE
+    rnd = random.Random(5)
+    samples = ["2026-01-15 20:15:10 | 相机温度初始：-5,0℃", "abc 相机 def ℃ xyz", "\tat x.y(Z.java:1)",
+               "plain ascii line"]
+    ok = all(sv.decode_app_line(sv.encode_app_line(t, k), k) == t for t in samples for k in range(95))
+    check("app cipher: round trip with Chinese text and '℃' for all 95 keys", ok)
+    raw = sv.encode_app_line(samples[0], 17)
+    moj = samples[0].encode("utf-8").decode("latin1").encode("utf-8")      # double-encoded UTF-8
+    check("app cipher: non-ASCII bytes are the double-encoded UTF-8, passed through unchanged",
+          bytes(b for b in raw if b >= 0x80) == bytes(b for b in moj if b >= 0x80))
+    check("app cipher: byte decoder (device logs) garbles text after a non-ASCII char",
+          sv.decode_line(sv.encode_app_line("ab 相机 temperature", 3), 3).endswith("temperature") is False)
+    check("app cipher: anchored via timestamp", sv.try_known(raw, sv.decode_app_line) == samples[0])
+
+    check("sniff: encrypted app log", sv.sniff(fx["app"]) == ("app", False), str(sv.sniff(fx["app"])))
+    out = os.path.join(tmp, "o_app_nr")
+    r = sv.process_file(fx["app"], out_dir=out, enabled=(), log=quiet)
+    dec = os.path.join(out, "Logs_App_20260115201500_decoded.txt")
+    check("app: output <stem>_decoded.txt", r["outputs"] == [dec], str(r["outputs"]))
+    got, exp = (body(dec) if os.path.exists(dec) else []), fx["app_lines"]
+    bad = [i for i, (g, e) in enumerate(zip(got, exp)) if g != e]
+    check("app: all %d lines exact (Chinese, '℃', stack trace lines)" % len(exp),
+          len(got) == len(exp) and not bad, "first diff %r" % ((got[bad[0]], exp[bad[0]]) if bad else None,))
+    check("app: no uncertain lines", r["uncertain"] == 0, str(r["uncertain"]))
+    check("sniff: our decoded app output is recognised as plain app log",
+          os.path.exists(dec) and sv.sniff(dec) == ("app", True))
+    if not os.path.exists(dec):
+        return
+    r2 = sv.process_file(dec, out_dir=os.path.join(tmp, "o_app_again"), enabled=(), log=quiet)
+    check("app: own output read again keeps UTF-8 text",
+          body(r2["outputs"][0]) == exp if r2["outputs"] else False)
+
+    out = os.path.join(tmp, "o_app")
+    r = sv.process_file(fx["app"], out_dir=out, log=quiet)
+    txt = "\n".join(body(r["outputs"][0])) if r["outputs"] else ""
+    check("app: redacted output written", bool(txt))
+    for k in ("ssid_short", "ssid_long", "password", "ip_dev", "ip_gw", "ip_other",
+              "lat_json", "lon_json"):
+        check("app: '%s' gone everywhere" % k, F[k] not in txt)
+    for k in ("mac", "ip_phone", "ip_box", "lat7", "lon7", "alt", "msl"):
+        check("app: '%s' gone everywhere" % k, A[k] not in txt)
+    check("app hotspot: ssid= / previousSsid= -> placeholders",
+          "wifi connected ssid=<SSID_1>, bssid=<MAC_1>, previousBssid=<MAC_1>, frequency=5180" in txt
+          and "previousSsid=<SSID_1>, previousBssid=<MAC_1>" in txt, txt[:0])
+    check("app hotspot: curWifi / curBoxWifi / lastWifiName",
+          "lastWifiName:--curWifi:<SSID_1>--curBoxWifi:<SSID_2>" in txt
+          and "lastWifiName:--curWifi:--curBoxWifi:<SSID_2>" in txt)
+    check("app hotspot: Wi-Fi bridge / Wi-Fi name",
+          "Wi-Fi bridge=====<SSID_1>-true--true-----false" in txt
+          and "Update Wi-Fi name: <SSID_1> mIsBoxConnected:true" in txt)
+    check("app hotspot: empty and 'null' Wi-Fi names stay, no extra SSID learned",
+          "Wi-Fi bridge=====-false--false-----false" in txt and "Wi-Fi bridge=====null-false" in txt
+          and "Update Wi-Fi name:  mIsBoxConnected:false" in txt and "<SSID_4>" not in txt)
+    check("app hotspot: SSID seen only in free text (ssid=) replaced",
+          "FAKE_CAFE" not in txt and "ssid=<SSID_3>, bssid=02:00:00:00:00:00, previousBssid=," in txt)
+    check("app hotspot: 'null object reference' untouched (no SSID 'null')",
+          "on a null object reference" in txt and "state, mIsBoxConnected:true selected" in txt)
+    check("app hotspot: Android placeholder '<unknown ssid>' kept", "<SSID: <unknown ssid>, BSSID:" in txt)
+    check("app hotspot: passwords -> <REDACTED>",
+          '"password":"<REDACTED>"' in txt and '"wifi_password":"<REDACTED>"' in txt)
+    check("app network: MAC -> <MAC_1>, Android placeholder 02:00:00:00:00:00 kept",
+          "<MAC_1>" in txt and "BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00" in txt)
+    check("app network: private IPs in free text masked (3rd octet)",
+          "loadBridgeHost192.168.<N1>.23" in txt and "Bridge IP: 192.168.<N1>.23" in txt
+          and "IP: /192.168.<N1>.105," in txt and "connect 192.168.<N2>.5:4700 failed" in txt
+          and "to /10.0.<N3>.1 (port 4700)" in txt, txt[:0])
+    check("app network: JSON ip/gateway use the same tokens", '"ip":"192.168.<N1>.23"' in txt
+          and '"gateway":"192.168.<N1>.1"' in txt and '"info":"ip:192.168.<N1>.105 ' in txt)
+    check("app network: public server IP, subnet mask and versions unchanged",
+          "http://203.0.113.10:8080/" in txt and '"subnet_mask":"255.255.255.0"' in txt
+          and '"poaefw_sdk_version":"1.2.3.0"' in txt and "poaeFw version:1.2.3.0" in txt
+          and "builddate: 1.0.12.20260101" in txt and '"tp_sdk_version":"60.32549.20260908"' in txt)
+    check("app location: JSON coordinates rounded",
+          '"CMD_MOUNT_GET_LOCATION":{"longitude":-23.5,"latitude":12.3}' in txt)
+    check("app location: Data1 / twilight / update lines rounded",
+          "Data1 longitude-time1 0-----23.5 latitude 12.3-=---4.2----19.150000000000002" in txt
+          and "TimeZoneHourOffset [2026, 1, 15, 20, 15, 30]   1.0---23.5---12.3" in txt
+          and "Update longitude and latitude: 23.5,12.3" in txt)
+    check("app location: GPS altitude -> <REDACTED>, accuracy kept",
+          "alt=<REDACTED> vAcc=1.5 mslAlt=<REDACTED> mslAltAcc=2.0" in txt
+          and "bestLocation 12.345nullprovider:network" in txt)
+    check("app: phone model and Android version kept (decision #18)",
+          "model:%s " % A["model"] in txt and "androidVersion:15" in txt)
+    check("app: Chinese text and '℃' intact after redaction",
+          "相机温度替换后：-5.0℃" in txt and "MainCameraActivity 相机 connected, temperature -5.0℃ ok" in txt)
+    check("app: counters per category",
+          r["redactions"]["hotspot"] > 0 and r["redactions"]["network"] > 0
+          and r["redactions"]["location"] > 0 and r["redactions"]["serial"] == 0, str(r["redactions"]))
+
+    r3 = sv.process_file(fx["app"], out_dir=os.path.join(tmp, "o_app_nonet"), log=quiet,
+                         enabled=tuple(c for c in sv.CATEGORIES if c != "network"))
+    t3 = "\n".join(body(r3["outputs"][0]))
+    check("app: --no-redact-network keeps MAC and IPs, rest redacted",
+          A["mac"] in t3 and A["ip_phone"] in t3 and F["ssid_short"] not in t3 and A["alt"] not in t3)
+    red = sv.Redactor(sv.CATEGORIES)
+    line = "[20:15:00.100] [Net] peer " + A["mac"]
+    check("device logs: MAC rule only active for app logs", red.feed(line) == line)
+
+    st = []
+    res = sv.process_all([fx["app"]], log=quiet, status=st.append, report=True)
+    check("app: status line names the type AppLog", st and " AppLog 1/1: " in st[0], str(st))
+    check("app: table row type AppLog", sv.results_table(res, "en")[2].split()[1] == "AppLog",
+          sv.results_table(res, "en")[2])
+    check("app: dry run counts match the real run", res[0]["redactions"] == r["redactions"],
+          "%s vs %s" % (res[0]["redactions"], r["redactions"]))
+
+
 # ---------------------------------------------------------------------------
 
 def build_fixtures(tmp):
@@ -1058,6 +1256,9 @@ def build_fixtures(tmp):
     write(fx["debug_plain"], "\n".join(dl) + "\n")
     fx["debug_nodate"] = os.path.join(e, "DebugLog_nodate.txt")
     write(fx["debug_nodate"], encrypt_lines(dl, 14))
+    fx["app_lines"] = al = app_plain()
+    fx["app"] = os.path.join(e, "Logs_App_20260115201500.txt")
+    write(fx["app"], encrypt_app_lines(al, 16))
     gv9, _ = guide_plain(version="9.9.9")
     fx["guide_v9"] = os.path.join(e, "GuideLog_2026-01-15_201501.txt")
     write(fx["guide_v9"], encrypt_lines(gv9, 15))
@@ -1085,6 +1286,7 @@ def main():
         t_status_table(fx, tmp)
         t_progress_i18n(fx, tmp)
         t_menu(fx, tmp)
+        t_app(fx, tmp)
         t_gui(fx, tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
