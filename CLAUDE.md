@@ -62,7 +62,7 @@ without tkinter or Xvfb those tests are reported as SKIP, not FAIL.
   repository, a secret, a tool, real logs), say exactly what is missing and stop; do not
   mock, substitute or guess.
 - **Never commit logs or tool outputs** (`GuideLog_*`, `DebugLog_*`, `*.glog`,
-  `*_decoded.txt`, `*_phd2.txt`, `*_redacted*`).
+  `*_decoded.txt`, `*_phd2.txt`, `*_redacted*`, `*_plain*`).
 - No third-party dependencies. numpy was benchmarked and is **4x slower** than the
   pure-Python lookup-table approach; do not reintroduce it.
 - Code, comments and specs in English. UI strings exist in German and English
@@ -264,7 +264,10 @@ phdlogview ignores these lines. When the tool reads its own output again, it ski
 ## Outputs and behaviour
 
 - **Output names:** `<stem>_decoded.txt`, `<stem>_phd2.txt` (GuideLog only, switch
-  `--no-phd2`), `<stem>_redacted.glog`.
+  `--no-phd2`), `<stem>_redacted.glog`
+  (`<stem>_plain.glog` when no category is redacted, #17).
+  Every output suffix must be in `OUT_SUFFIXES`, `.gitignore` and both README tables,
+  otherwise folder mode reads the output back in as input.
 - **Location:** next to the input, or in `-o OUT` (flat, created if missing).
 - **Safety:**
   - The originals are never modified.

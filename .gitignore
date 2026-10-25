@@ -5,6 +5,7 @@ DebugLog_*
 *_decoded.txt
 *_phd2.txt
 *_redacted*
+*_plain*
 logs/
 *.zip
 *.bz2
