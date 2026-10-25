@@ -13,10 +13,8 @@ logs/
 __pycache__/
 *.py[cod]
 
-# Claude Code project notes: kept local by maintainer decision
-# (CLAUDE.local.md is private by design; CLAUDE.md could be shared but is not)
+# Private Claude notes (CLAUDE.md itself is part of the repo)
 CLAUDE.local.md
-CLAUDE.md
 
 # Credentials (GitHub token etc.)
 .secrets/
