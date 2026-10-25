@@ -199,9 +199,16 @@ cipher, but:
   `<unknown ssid>` and `02:00:00:00:00:00` placeholders (kept); `bssid=` MACs; about
   30 free-text IPv4 formats (so: every private IPv4, public ones stay, e.g. the OTA
   server); lat/lon in JSON, `Update longitude and latitude: a,b`,
-  `Data1 longitude-time1 n-----lon latitude lat-=---…`,
-  `…TimeZoneHourOffset [y, m, d, h, m, s]   tz---lon---lat`; GPS `alt=`/`mslAlt=` in
+  `Data1 longitude-time1 n-----lon latitude lat-=---<dawn h>----<dusk h>`,
+  `…TimeZoneHourOffset [y, m, d, h, m, s]   tz---lat---lon`; GPS `alt=`/`mslAlt=` in
   `bestLocation Location[…]` (Android already masks lat/lon there).
+- **Twilight block** (verified 2026-10-25): `Data1 <deg> deg rise|down|sunrise|sunset
+  time D h m s.ssss` for -18/-12/-6/-0.833 deg, the two decimal hours in the
+  `longitude-time1` line (-18 deg dawn/dusk) and `TwilightData{…mHours/mMinutes/
+  mSeconds…}`. Times are in UT+offset with sub-second precision; with the date they
+  give the longitude (rough test: ~17 km) and, away from the equinox, the latitude,
+  so they are `<REDACTED>` (location). `Data1 UT time … offset …` is the current
+  time and stays.
 - **Not personal (checked):** `generateKey ToupTek#Server#…` (cache keys),
   `…VersionKey`/`latestToupSdkKey` (versions), `/data/user/0/…` (app path),
   `deviceId=` (Android input device), `sessionId=` (stream number). No account,

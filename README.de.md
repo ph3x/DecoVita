@@ -63,8 +63,9 @@ Schwärzung.
 - **Standort (DebugLog):** Breite und Länge werden auf 0,1° gerundet. Höhe und
   Azimut der Montierung, Sternzeit, Höhe über dem Meer und UTC-Zeit werden entfernt,
   weil sich daraus der Standort sehr genau zurückrechnen ließe.
-- **Standort (App-Log):** Breite und Länge werden auf 0,1° gerundet, die GPS-Höhe
-  wird entfernt.
+- **Standort (App-Log):** Breite und Länge werden auf 0,1° gerundet. Die GPS-Höhe
+  und die berechneten Dämmerungs-, Sonnenauf- und -untergangszeiten werden entfernt,
+  weil sie zusammen mit dem Datum den Standort verraten.
 - **Standort (GuideLog):** bleibt unverändert. Der Kopf enthält den Standort nur auf
   etwa 10 km genau.
 - **Seriennummern:** Seriennummer der Kamera sowie die Felder Besitzer, Künstler und

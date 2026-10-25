@@ -400,6 +400,13 @@ _RE_APP_LATLON = (
     re.compile(r'(TimeZoneHourOffset \[[^\]]*\]\s+-?[\d.]+---)(-?\d+(?:\.\d+)?)(---)(-?\d+(?:\.\d+)?)'),
 )
 _RE_APP_ALT = re.compile(r'(\b(?:alt|mslAlt)=)(-?\d+(?:\.\d+)?)')
+# twilight / sunrise / sunset times: together with the date they give the site
+_RE_APP_TWI = (
+    re.compile(r'(Data\d+ -?[\d.]+ deg (?:rise|down|sunrise|sunset) time )(\S.*)$'),
+    re.compile(r'(\bm(?:Hours|Minutes|Seconds)=)(-?\d+(?:\.\d+)?)'),
+)
+# "Data1 longitude-time1 n-----lon latitude lat-=---<dawn h>----<dusk h>"
+_RE_APP_TWI_HOURS = re.compile(r'( latitude \S*?-=---)(-?\d+(?:\.\d+)?)(----)(-?\d+(?:\.\d+)?)')
 
 
 def _private_ip(o1, o2):
@@ -602,11 +609,19 @@ class Redactor:
                             + _round1(m.group(4)))
                 for rx in _RE_APP_LATLON:
                     line = rx.sub(ll, line)
+            def blank(m):
+                self.counts["location"] += 1
+                return m.group(1) + REDACTED
             if "Location[" in line:
-                def alt(m):
-                    self.counts["location"] += 1
-                    return m.group(1) + REDACTED
-                line = _RE_APP_ALT.sub(alt, line)
+                line = _RE_APP_ALT.sub(blank, line)
+            if " time " in line or "TwilightData" in line:
+                for rx in _RE_APP_TWI:
+                    line = rx.sub(blank, line)
+            if "-=---" in line:
+                def hours(m):
+                    self.counts["location"] += 2
+                    return m.group(1) + REDACTED + m.group(3) + REDACTED
+                line = _RE_APP_TWI_HOURS.sub(hours, line)
         return line
 
     # -- public ----------------------------------------------------------

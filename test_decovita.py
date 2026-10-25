@@ -324,9 +324,17 @@ def app_plain():
       'securityPatch:2026-01-01 pid:12345 builddate: 1.0.12.20260101"}}' % (A["ip_phone"], A["model"]))
     a('logCallback: [CoreClient][RES] {"id":123,"command_type":"CMD_MOUNT_GET_LOCATION":{"longitude":%s,"latitude":%s}}'
       % (F["lon_json"], F["lat_json"]))
-    a("Data1 longitude-time1 0-----%s latitude %s-=---4.2----19.150000000000002" % (A["lon7"], A["lat7"]))
+    a("Data1 longitude-time1 0-----%s latitude %s-=---5.21----17.8" % (A["lon7"], A["lat7"]))
     a("BrokenLineView drawTwilightBackgroundutcTimeZoneHourOffset [2026, 1, 15, 20, 15, 30]   1.0---%s---%s"
-      % (A["lon7"], A["lat7"]))
+      % (A["lat7"], A["lon7"]))
+    a("BrokenLineView drawTwilightBackground low-frequency: 0+++0+++0+++0")
+    a("BrokenLineView drawTwilightBackground low-frequency details 0---TwilightData{mYears=2026, mMonths=1, "
+      "mDays=16, mHours=5, mMinutes=12, mSeconds=33.123456789012345, mGmtoff=-1234567890123456789}---"
+      "TwilightData{mYears=2026, mMonths=1, mDays=15, mHours=17, mMinutes=48, mSeconds=7.987654321098765, mGmtoff=0}")
+    a("Data1 UT time 2026 1 15 19 15 30 offset 1.0")
+    for deg, kind, t in (("-18", "rise", "16 5 12 33.123456789012345"), ("-18", "down", "15 17 48 7.987654321098765"),
+                         ("-0.833", "sunrise", "16 6 41 2.5"), ("-0.833", "sunset", "15 16 19 38.25")):
+        a("Data1 %s deg %s time %s" % (deg, kind, t))
     a("Update longitude and latitude: %s,%s" % (A["lon7"], A["lat7"]))
     a("bestLocation Location[gps 12******,23****** hAcc=12.345 et=+1d2h3m4s567ms alt=%s vAcc=1.5 mslAlt=%s "
       "mslAltAcc=2.0 vel=0.0 bear=0.0 {Bundle[{satellites=0, maxCn0=0, QUICKGPS=true, HDACC=0.0, "
@@ -1198,9 +1206,16 @@ def t_app(fx, tmp):
     check("app location: JSON coordinates rounded",
           '"CMD_MOUNT_GET_LOCATION":{"longitude":-23.5,"latitude":12.3}' in txt)
     check("app location: Data1 / twilight / update lines rounded",
-          "Data1 longitude-time1 0-----23.5 latitude 12.3-=---4.2----19.150000000000002" in txt
-          and "TimeZoneHourOffset [2026, 1, 15, 20, 15, 30]   1.0---23.5---12.3" in txt
+          "Data1 longitude-time1 0-----23.5 latitude 12.3-=---<REDACTED>----<REDACTED>" in txt
+          and "TimeZoneHourOffset [2026, 1, 15, 20, 15, 30]   1.0---12.3---23.5" in txt
           and "Update longitude and latitude: 23.5,12.3" in txt)
+    check("app location: twilight/sunrise/sunset times -> <REDACTED>, current UT time kept",
+          "Data1 -18 deg rise time <REDACTED>" in txt and "Data1 -18 deg down time <REDACTED>" in txt
+          and "Data1 -0.833 deg sunrise time <REDACTED>" in txt and "Data1 -0.833 deg sunset time <REDACTED>" in txt
+          and "mDays=16, mHours=<REDACTED>, mMinutes=<REDACTED>, mSeconds=<REDACTED>, mGmtoff=" in txt
+          and "33.1234" not in txt and "7.9876" not in txt and "38.25" not in txt
+          and "Data1 UT time 2026 1 15 19 15 30 offset 1.0" in txt
+          and "low-frequency: 0+++0+++0+++0" in txt)
     check("app location: GPS altitude -> <REDACTED>, accuracy kept",
           "alt=<REDACTED> vAcc=1.5 mslAlt=<REDACTED> mslAltAcc=2.0" in txt
           and "bestLocation 12.345nullprovider:network" in txt)
