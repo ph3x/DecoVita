@@ -7,9 +7,10 @@ StellaVita. Not affiliated with ToupTek.
 
 ## Features
 
-- Decode `GuideLog_*.txt` and `DebugLog_*.txt`
+- Decode `GuideLog_*.txt` and `DebugLog_*.txt` (device) and `Logs_App_*.txt`
+  (phone app)
 - Redact personal data (on by default, each category can be switched off):
-  hotspot/Wi-Fi, network addresses, location, serial numbers
+  hotspot/Wi-Fi, network addresses (IP and MAC), location, serial numbers
 - Additionally convert GuideLogs to PHD2 format (for phdlogview)
 - Redact `libtoupcam*.glog` files (plain text)
 
@@ -42,6 +43,7 @@ Useful switches:
 |---|---|
 | GuideLog | `<name>_decoded.txt` and `<name>_phd2.txt` |
 | DebugLog | `<name>_decoded.txt` (timestamps with full date) |
+| App log (`Logs_App_*.txt`) | `<name>_decoded.txt` |
 | `.glog` | `<name>_redacted.glog` (`<name>_plain.glog` with `--no-redact`) |
 
 The outputs are written next to the input, or into an output folder (`-o` on the
@@ -55,13 +57,19 @@ what was redacted.
 - **Hotspot/Wi-Fi:** network names become `<SSID_1>`, `<SSID_2>`, …;
   passwords become `<REDACTED>`.
 - **Network:** the third part of IP addresses is replaced (`192.168.<N1>.23`).
-  Devices stay distinguishable, the network does not.
+  Devices stay distinguishable, the network does not. In app logs this applies to
+  every private IP address (public addresses such as ToupTek's update server stay),
+  and MAC/BSSID addresses become `<MAC_1>`, `<MAC_2>`, ….
 - **Location (DebugLog):** latitude and longitude are rounded to 0.1°. Mount
   altitude/azimuth, sidereal time, elevation and UTC time are removed, because the
   site could be reconstructed from them very precisely.
+- **Location (app log):** latitude and longitude are rounded to 0.1°. The GPS
+  altitude and the computed twilight, sunrise and sunset times are removed, because
+  together with the date they give away the site.
 - **Location (GuideLog):** unchanged. The header only contains the location at
   roughly 10 km precision.
 - **Serial numbers:** camera serial number, owner, artist and copyright fields.
+- **Not redacted:** phone model and Android version in the app log.
 
 Redaction is an aid, not a guarantee. Check the outputs yourself before you share
 them.
@@ -75,6 +83,10 @@ DebugLog, `2` for date lines in the GuideLog) gives one or two possible start
 values; the timestamp confirms the right one. For lines without a timestamp the
 script tries all 95 start values and keeps the most plausible text. Space and `~`
 are encoded the same way and cannot be told apart afterwards.
+
+The phone app logs use the same scheme with two differences: non-ASCII characters
+(for example Chinese texts or `℃`) are left as they are and do not count as a
+position, and the text is UTF-8-encoded twice. The tool undoes both.
 
 The scheme was derived from the log files alone. There is no documentation of it
 from ToupTek.

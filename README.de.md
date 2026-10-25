@@ -7,9 +7,10 @@ des ToupTek StellaVita. Keine Verbindung zu ToupTek.
 
 ## Funktionen
 
-- `GuideLog_*.txt` und `DebugLog_*.txt` entschlüsseln
+- `GuideLog_*.txt` und `DebugLog_*.txt` (Gerät) sowie `Logs_App_*.txt`
+  (Handy-App) entschlüsseln
 - Persönliche Daten schwärzen (standardmäßig an, einzeln abschaltbar):
-  Hotspot/WLAN, Netzwerkadressen, Standort, Seriennummern
+  Hotspot/WLAN, Netzwerkadressen (IP und MAC), Standort, Seriennummern
 - GuideLogs zusätzlich ins PHD2-Format umwandeln (für phdlogview)
 - `libtoupcam*.glog` (Klartext) schwärzen
 
@@ -42,6 +43,7 @@ Nützliche Schalter:
 |---|---|
 | GuideLog | `<Name>_decoded.txt` und `<Name>_phd2.txt` |
 | DebugLog | `<Name>_decoded.txt` (Zeitstempel mit vollem Datum) |
+| App-Log (`Logs_App_*.txt`) | `<Name>_decoded.txt` |
 | `.glog` | `<Name>_redacted.glog` (`<Name>_plain.glog` mit `--no-redact`) |
 
 Die Ausgaben landen neben der Eingabe oder in einem Zielordner (`-o` in der
@@ -55,14 +57,20 @@ Schwärzung.
 - **Hotspot/WLAN:** Netzwerknamen werden zu `<SSID_1>`, `<SSID_2>`, …;
   Passwörter werden zu `<REDACTED>`.
 - **Netzwerk:** Der dritte Teil von IP-Adressen wird ersetzt (`192.168.<N1>.23`).
-  Geräte bleiben unterscheidbar, das Netz nicht.
+  Geräte bleiben unterscheidbar, das Netz nicht. In App-Logs gilt das für jede
+  private IP-Adresse (öffentliche Adressen wie der Update-Server von ToupTek
+  bleiben), und MAC-/BSSID-Adressen werden zu `<MAC_1>`, `<MAC_2>`, ….
 - **Standort (DebugLog):** Breite und Länge werden auf 0,1° gerundet. Höhe und
   Azimut der Montierung, Sternzeit, Höhe über dem Meer und UTC-Zeit werden entfernt,
   weil sich daraus der Standort sehr genau zurückrechnen ließe.
+- **Standort (App-Log):** Breite und Länge werden auf 0,1° gerundet. Die GPS-Höhe
+  und die berechneten Dämmerungs-, Sonnenauf- und -untergangszeiten werden entfernt,
+  weil sie zusammen mit dem Datum den Standort verraten.
 - **Standort (GuideLog):** bleibt unverändert. Der Kopf enthält den Standort nur auf
   etwa 10 km genau.
 - **Seriennummern:** Seriennummer der Kamera sowie die Felder Besitzer, Künstler und
   Copyright.
+- **Nicht geschwärzt:** Handymodell und Android-Version im App-Log.
 
 Das Schwärzen ist eine Hilfe, keine Garantie. Prüfe die Ausgaben selbst, bevor du
 sie weitergibst.
@@ -76,6 +84,11 @@ DebugLog, `2` für Datumszeilen im GuideLog) ergeben sich ein oder zwei möglich
 Startwerte; der Zeitstempel bestätigt den richtigen. Bei Zeilen ohne Zeitstempel
 probiert das Skript alle 95 Startwerte durch und nimmt den plausibelsten Text.
 Leerzeichen und `~` werden gleich kodiert und sind danach nicht unterscheidbar.
+
+Die Logs der Handy-App nutzen dasselbe Verfahren mit zwei Unterschieden:
+Nicht-ASCII-Zeichen (z. B. chinesische Texte oder `℃`) bleiben unverändert und
+zählen nicht als Position, und der Text ist doppelt UTF-8-kodiert. Das Tool macht
+beides rückgängig.
 
 Das Verfahren wurde allein aus den Logdateien abgeleitet. Es gibt dazu keine
 Dokumentation von ToupTek.
