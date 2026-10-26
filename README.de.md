@@ -12,6 +12,9 @@ des ToupTek StellaVita. Keine Verbindung zu ToupTek.
 - Persönliche Daten schwärzen (standardmäßig an, einzeln abschaltbar):
   Hotspot/WLAN, Netzwerkadressen (IP und MAC), Standort, Seriennummern
 - Jede geschwärzte Ausgabe auf übrig gebliebene persönliche Daten prüfen (Nachprüfung)
+- Warnen, wenn sich ein Log nicht mehr sicher entschlüsseln lässt (z. B. weil ein
+  Firmware- oder App-Update das Format geändert hat), und sich vor jedem Lauf an
+  eingebauten Beispielzeilen selbst prüfen
 - GuideLogs zusätzlich ins PHD2-Format umwandeln (für phdlogview)
 - `libtoupcam*.glog` (Klartext) schwärzen
 
@@ -56,6 +59,7 @@ Nützliche Schalter:
   ein Fünftel der Laufzeit)
 - `--no-full-date` – DebugLog-Zeitstempel im Originalformat (ohne Datum)
 - `--force` – vorhandene Ausgaben überschreiben
+- `--selftest` – nur den Selbsttest ausführen (siehe unten) und das Ergebnis zeigen
 
 ## Ausgaben
 
@@ -143,11 +147,35 @@ beides rückgängig.
 Das Verfahren wurde allein aus den Logdateien abgeleitet. Es gibt dazu keine
 Dokumentation von ToupTek.
 
+### Decodier-Sicherheit und Selbsttest
+
+Ein Firmware- oder App-Update könnte die Kodierung ändern. Das Tool würde dann
+Zeichensalat erzeugen, und in Zeichensalat findet die Schwärzung keine
+persönlichen Daten. Dagegen gibt es zwei Prüfungen:
+
+- **Decodier-Sicherheit:** der Anteil der nicht leeren Zeilen einer Datei, die
+  sicher entschlüsselt wurden (ein Zeitstempel hat den Startwert bestätigt, oder
+  ein Startwert war klar der plausibelste). Er steht pro Datei in der Ausgabe
+  (`Decodier-Sicherheit 100.0 %`) und in der Übersichtstabelle, Spalte `sicher`
+  (`-` = nicht entschlüsselt, z. B. `.glog` oder eine schon entschlüsselte
+  Datei). Alle bisherigen echten Logs erreichen 100.0 %. Unter 95 % wird der
+  Wert mit `!` markiert, und eine Warnung sagt, dass sich das Format vermutlich
+  geändert hat und die Schwärzung unvollständig sein kann. Dateien mit weniger
+  als 20 Zeilen bekommen keine Warnung (zu wenig für ein Urteil).
+- **Unbekanntes Format:** Eine Datei, die wie ein StellaVita-Log heißt
+  (`GuideLog_*.txt`, `DebugLog_*.txt`, `Logs_App_*.txt`, `*.glog`), deren Inhalt
+  sich aber gar nicht entschlüsseln lässt, wird mit einer Warnung übersprungen;
+  die Tabelle zeigt `Format geändert?`.
+- **Selbsttest:** Vor jedem Lauf entschlüsselt, schwärzt und prüft das Tool
+  einige eingebaute, erfundene Beispielzeilen in den echten Logformaten. Schlägt
+  das fehl, verarbeitet es nichts und nennt die fehlgeschlagenen Prüfungen.
+  `--selftest` führt ihn allein aus.
+
 ## Bekannte Grenzen
 
 - Leerzeichen und `~` sind nicht unterscheidbar (siehe oben).
 - Zeilen, die nur aus Ziffern bestehen, können mehrdeutig sein. Die Statistik zählt
-  solche Zeilen als "unsicher".
+  solche Zeilen als "unsicher"; das senkt die Decodier-Sicherheit etwas.
 - phdlogview interpoliert die Zeitachse aus den Bildnummern. Ändert sich die
   Bildrate, sind die Zeitbeschriftungen irreführend; beim Überfahren mit der Maus
   wird die echte Zeit angezeigt.

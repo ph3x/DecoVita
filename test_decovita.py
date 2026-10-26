@@ -19,6 +19,7 @@ import os
 import re
 import sys
 import io
+import math
 import random
 import shutil
 import hashlib
@@ -1089,6 +1090,13 @@ def t_gui(fx, tmp):
         p = run([sys.executable, TOOL], env=env)
         made = sorted(os.listdir(work))
         check("window run writes outputs", any(m.endswith("_phd2.txt") for m in made), str(made) + p.stderr[-200:])
+        if fx.get("broken_tool"):
+            work_b = os.path.join(tmp, "gui_broken")
+            os.makedirs(work_b)
+            shutil.copy(fx["guide"], work_b)
+            p = run([sys.executable, fx["broken_tool"]], env=dict(env, DV_GUI_AUTORUN=work_b))
+            check("window with a failed selftest writes nothing (#9)",
+                  os.listdir(work_b) == [os.path.basename(fx["guide"])], str(os.listdir(work_b)) + p.stderr[-200:])
         _gui_layout_and_outdir(fx, tmp, env)
     finally:
         if xv:
@@ -1702,6 +1710,165 @@ def t_leak_check(fx, tmp):
           cp.stdout + cp.stderr)
 
 
+def t_confidence(fx, tmp):
+    """#7: decode confidence per file, warning when the format looks changed."""
+    print("\n[22] Decode confidence and format-change warning (#7)")
+    d = os.path.join(tmp, "conf")
+    out = os.path.join(d, "out")
+    os.makedirs(out)
+    res = {k: sv.process_file(fx[k], out_dir=out, log=quiet) for k in ("guide", "debug", "app")}
+    for k, r in res.items():
+        # the DebugLog fixture has one inherently ambiguous digit-only line
+        want = 100.0 if k != "debug" else math.floor(1000.0 * (r["lines"] - 2) / (r["lines"] - 1)) / 10
+        check("confidence of the %s fixture: %.1f" % (k, want), r["confidence"] == want,
+              "%s (uncertain %d)" % (r["confidence"], r["uncertain"]))
+        check("no confidence warning for the %s fixture" % k, "low_confidence" not in r["warnings"],
+              str(r["warnings"]))
+    rg = sv.process_file(fx["glog"], out_dir=out, log=quiet)
+    rp = sv.process_file(fx["debug_plain"], out_dir=out, log=quiet)
+    check("glog / already plain input: no confidence (not decoded)",
+          rg["confidence"] is None and rp["confidence"] is None, "%s %s" % (rg["confidence"], rp["confidence"]))
+
+    # simulated format change: the first lines (with the type markers) stay as
+    # they are, the 400 filler lines are reversed, i.e. no longer decodable
+    dl = fx["debug_lines"]
+    rnd = random.Random(21)
+    enc = [sv.encode_line(l, rnd.randint(0, 94)) for l in dl]
+    bad = enc[:60] + [e[::-1] for e in enc[60:]]
+    pb = os.path.join(d, "DebugLog_2026-01-15_201502.txt")
+    write(pb, b"\n".join(bad) + b"\n")
+    msgs = []
+    rb = sv.process_file(pb, out_dir=out, log=msgs.append)
+    check("changed format: confidence below the threshold",
+          rb["confidence"] is not None and rb["confidence"] < sv.CONFIDENCE_WARN, str(rb["confidence"]))
+    check("changed format: warning 'low_confidence'", "low_confidence" in rb["warnings"], str(rb["warnings"]))
+    check("changed format: readable warning in the log",
+          any("Decode confidence only" in m and "redaction may be incomplete" in m for m in msgs), "\n".join(msgs))
+    check("changed format: confidence shown in the statistics line",
+          any("decode confidence %.1f%%" % rb["confidence"] in m for m in msgs), "\n".join(msgs))
+    check("confidence = sure share of the non-empty lines",
+          rb["confidence"] == math.floor(1000.0 * (rb["lines"] - 1 - rb["uncertain"]) / (rb["lines"] - 1)) / 10,
+          "%s %s %s" % (rb["confidence"], rb["lines"], rb["uncertain"]))
+    msgs = []
+    rr = sv.process_file(pb, out_dir=os.path.join(d, "dry"), report=True, log=msgs.append)
+    check("dry run: same confidence and warning",
+          rr["confidence"] == rb["confidence"] and any("Decode confidence only" in m for m in msgs),
+          "\n".join(msgs))
+    tab = sv.results_table([res["debug"], rb, rg], "en")
+    col = tab[0].index("Conf")
+    cells = [row[:col + len("Conf")].split()[-1] for row in tab[2:]]
+    check("table: 'Conf' column (99.7%, value with '!' below threshold, '-' for glog)",
+          cells == ["%.1f%%" % res["debug"]["confidence"], "%.1f%%!" % rb["confidence"], "-"], "\n".join(tab))
+    check("table DE: column 'sicher'", " sicher " in sv.results_table([rb], "de")[0], sv.results_table([rb], "de")[0])
+    msgs = []
+    sv.process_file(pb, out_dir=os.path.join(d, "de"), lang="de", log=msgs.append)
+    check("warning in German", any("Decodier-Sicherheit nur" in m for m in msgs), "\n".join(msgs))
+
+    # too few lines to judge: confidence shown, but no warning
+    small = enc[:3] + [e[::-1] for e in enc[60:75]]
+    ps = os.path.join(d, "DebugLog_2026-01-15_201503.txt")
+    write(ps, b"\n".join(small) + b"\n")
+    rs = sv.process_file(ps, out_dir=out, log=quiet)
+    check("few lines (< CONFIDENCE_MIN_LINES): low confidence but no warning",
+          rs["kind"] == "debug" and rs["confidence"] < sv.CONFIDENCE_WARN
+          and "low_confidence" not in rs["warnings"], "%s %s %s" % (rs["kind"], rs["confidence"], rs["warnings"]))
+
+    # completely changed format: the type cannot be detected any more
+    pu = os.path.join(d, "DebugLog_2026-01-15_201504.txt")
+    write(pu, b"\n".join(e[::-1] for e in enc) + b"\n")
+    msgs = []
+    ru = sv.process_file(pu, out_dir=out, log=msgs.append)
+    check("log name, undecodable content: skipped with 'unknown_format' warning",
+          ru["skipped"] == "unknown" and "unknown_format" in ru["warnings"]
+          and any("log format changed" in m for m in msgs), "%s %s" % (ru["warnings"], msgs))
+    rn = sv.process_file(fx["unknown"], out_dir=out, log=quiet)
+    check("other unknown file (notes.txt): no format warning", "unknown_format" not in rn["warnings"],
+          str(rn["warnings"]))
+    tab = sv.results_table([ru, rn], "en")
+    check("table: 'format changed?' vs. 'unknown'",
+          tab[2].endswith("format changed?") and tab[3].endswith("unknown") and tab[2].split()[3] == "-",
+          "\n".join(tab))
+    cp = run([sys.executable, TOOL, pu, "-o", os.path.join(d, "cli"), "--lang", "en"])
+    check("CLI: format warning shown", cp.returncode == 0 and "log format changed" in cp.stdout,
+          cp.stdout + cp.stderr)
+
+
+def t_selftest(fx, tmp):
+    """#9: built-in sample lines, --selftest and the silent check before every run."""
+    print("\n[23] Selftest (#9)")
+    n, failed = sv.selftest()
+    check("selftest passes", n >= 4 * len(sv._SELFTEST) and not failed, "%d %s" % (n, failed))
+    kinds = {k for k, *_ in sv._SELFTEST}
+    check("selftest covers DebugLog, GuideLog and app log", kinds == {"debug", "guide", "app"}, str(kinds))
+    check("selftest has a line without timestamp (brute force)",
+          any(not sv.TS.match(p) for _, _, p, _, _ in sv._SELFTEST))
+    check("selftest has a non-ASCII app line", any(k == "app" and not p.isascii() for k, _, p, _, _ in sv._SELFTEST))
+    check("selftest covers every redaction category except serial and the leak check",
+          {c for *_, cats in sv._SELFTEST for c in cats} == {"hotspot", "network", "location"})
+    # counter-checks: a broken decoder, a broken redactor, a blind leak check
+    for name, attr, bad, part in (
+            # every 7th character off by one (a constant key shift would be healed
+            # by the brute-force search, so it is no test)
+            ("decoder", "decode_line", lambda raw, t0, f=sv.decode_line: f(
+                bytes(b if j % 7 else 33 + (b - 32) % 94 for j, b in enumerate(raw)), t0), " decode"),
+            ("app decoder", "decode_app_line",
+             lambda raw, t0, f=sv.decode_app_line: f(raw[::-1], t0), "app decode"),
+            ("redactor", "Redactor", lambda en, app=False, R=sv.Redactor: R((), app=app), " redact"),
+            ("leak check", "_leak_cats", lambda line, state: set(), " leak check")):
+        orig = getattr(sv, attr)
+        setattr(sv, attr, bad)
+        try:
+            n2, failed = sv.selftest()
+        finally:
+            setattr(sv, attr, orig)
+        check("selftest fails with a broken %s" % name, any(f.endswith(part) for f in failed), str(failed))
+    crash = sv.Redactor.feed
+    sv.Redactor.feed = lambda self, line: 1 / 0
+    try:
+        failed = sv.selftest()[1]
+    finally:
+        sv.Redactor.feed = crash
+    check("selftest: an exception is a failure, not a crash", failed and "ZeroDivisionError" in failed[0], str(failed))
+
+    p = run([sys.executable, TOOL, "--selftest", "--lang", "en"])
+    check("--selftest: exit 0 and OK line", p.returncode == 0 and "Selftest: OK" in p.stdout, p.stdout + p.stderr)
+    p = run([sys.executable, TOOL, "--selftest", "--lang", "de"])
+    check("--selftest German", "Selbsttest: OK" in p.stdout, p.stdout)
+    check("--help lists --selftest", "--selftest" in run([sys.executable, TOOL, "--help"]).stdout)
+    for rd, col in (("README.md", "`Conf`"), ("README.de.md", "`sicher`")):
+        txt = open(os.path.join(HERE, rd), encoding="utf-8").read()
+        check("%s documents --selftest and the %s column" % (rd, col), "--selftest" in txt and col in txt)
+    check("normal run: selftest is silent", "Selftest" not in run(
+        [sys.executable, TOOL, fx["glog"], "-o", os.path.join(tmp, "st_ok")]).stdout)
+
+    # a tool with a broken decoder refuses to process anything
+    src = open(TOOL, encoding="utf-8").read()
+    marker = "a = t - 1 if t > 32 else t\n        tab = "    # decode tables: the gap at t = 32
+    broken = os.path.join(tmp, "st_broken", "decovita.py")
+    check("broken tool: mutation applies", src.count(marker) == 1)
+    write(broken, src.replace(marker, "a = t\n        tab = ", 1))
+    fx["broken_tool"] = broken                      # also used by t_gui
+    p = run([sys.executable, broken, "--selftest", "--lang", "en"])
+    check("broken tool: --selftest exit 1 and FAILED", p.returncode == 1 and "Selftest FAILED" in p.stdout,
+          p.stdout + p.stderr)
+    out = os.path.join(tmp, "st_out")
+    p = run([sys.executable, broken, fx["guide"], "-o", out, "--lang", "en"])
+    check("broken tool: normal run stops with exit 2, nothing written",
+          p.returncode == 2 and "nothing is processed" in p.stdout and not os.path.exists(out),
+          p.stdout + p.stderr)
+    env = dict(os.environ, LANG="en_US.UTF-8")
+    stub = os.path.join(tmp, "st_notk")
+    write(os.path.join(stub, "tkinter.py"), "raise ImportError('no tk (test stub)')\n")
+    env["PYTHONPATH"] = stub
+    work = os.path.join(tmp, "st_menu")
+    os.makedirs(work)
+    shutil.copy(fx["glog"], work)
+    p = run([sys.executable, broken], input=work + "\nn\n\n\n", env=env)
+    check("broken tool: text menu stops with exit 2, nothing written",
+          p.returncode == 2 and "Selftest FAILED" in p.stdout and os.listdir(work) == ["libtoupcam_latest.glog"],
+          p.stdout[-400:] + p.stderr[-300:])
+
+
 def build_fixtures(tmp):
     d = os.path.join(tmp, "fix")
     fx = {"dir": d}
@@ -1761,6 +1928,8 @@ def main():
         t_placeholders(fx, tmp)
         t_any_net(fx, tmp)
         t_leak_check(fx, tmp)
+        t_confidence(fx, tmp)
+        t_selftest(fx, tmp)
         t_gui(fx, tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

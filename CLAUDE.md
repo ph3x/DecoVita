@@ -103,6 +103,21 @@ into a FAIL, and `DV_TEST_SHOTS=<dir>` stores GUI screenshots (Linux: ImageMagic
   the full patterns (231 MB DebugLog: ~6 s). `process_file(..., leak_check=True)`
   stores `res["leaks"]` (`None` = not checked); `_log_done` prints category, count
   and line numbers, never values; table column `Leaks`/`Reste`.
+- **Decode confidence (#7):** `_confidence(res, filled, plain)` -> `res["confidence"]` =
+  share (percent, rounded down to 0.1) of non-empty lines that are anchored or guessed
+  with margin >= `UNCERTAIN_MARGIN`; `None` if not decoded (glog, plain input). Below
+  `CONFIDENCE_WARN = 95` (and >= `CONFIDENCE_MIN_LINES = 20` lines) -> warning
+  `low_confidence`. Measured 2026-10-26: 100.0 on all real logs; a simulated cipher
+  change (reversed/shifted lines) 12-27. A totally changed cipher makes `sniff` return
+  `unknown`; if the name matches `_LOG_NAME`, the file gets `unknown_format` and the
+  table state `format changed?`. Table column `Conf`/`sicher`, `!` below the threshold.
+- **Selftest (#9):** `_SELFTEST` = fictitious sample lines (DebugLog, gphoto line without
+  timestamp, GuideLog, app incl. non-ASCII) with **fixed** cipher bytes, expected
+  plain/redacted text and leak-check categories. `selftest()` -> (checks, failed names);
+  `selftest_ok(lang, log)` runs silently before every CLI/menu/GUI run and stops the
+  run (exit 2) on failure; `--selftest` runs it alone (exit 0/1). A constant key
+  shift in the decoder is healed by the brute force, so mutation tests must break
+  the cipher differently (tests use the `t > 32` gap).
 - **PHD2 conversion:** `convert_to_phd2(lines, stats)`.
 - **Orchestration:** `process_file(...)` (one file), `process_all(files, ...)` (several
   files: sniffs each once, emits a status line `[i/n] <Type> j/m: <name>` per file,
@@ -401,14 +416,15 @@ phdlogview ignores these lines. When the tool reads its own output again, it ski
 - **Coverage:** cipher, type detection, exact decoding, redaction per
   category, redaction in doubt, category switches, output header, GuideLog location
   kept, dates/rollover, PHD2 conversion, files, dry run, version check, CLI,
-  progress/i18n, text menu (incl. tkinter-without-display), GUI under Xvfb or on the
+  progress/i18n, decode confidence and format-change warning, selftest (with broken
+  decoder/redactor/leak-check counter-checks), text menu (incl. tkinter-without-display), GUI under Xvfb or on the
   native desktop (Windows/macOS).
 - **Portability:** every subprocess goes through `run()`: UTF-8 pipes on every platform
   (Windows with Python <= 3.14 defaults to cp1252 and breaks on `℃`) and a timeout,
   so a window that waits for input fails the check instead of hanging the suite. The
   test "tkinter without display" is skipped on Windows/macOS: removing `DISPLAY` hides
   nothing there.
-- **Last run:** 376/376 passed on Python 3.14 with Xvfb (2026-10-26); CI results: see the Actions tab.
+- **Last run:** 418/418 passed on Python 3.14 with Xvfb (2026-10-26); CI results: see the Actions tab.
 - **Fixtures:** built in a temp dir from fake plaintext and encrypted with `encode_line`.
   All values are invented (e.g. `FAKE_HOME`/`FAKE_HOME_EXT`, `FAKESERIAL…`,
   `192.168.77.x`).

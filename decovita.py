@@ -258,6 +258,12 @@ def _score(d, mdl=None):
 
 UNCERTAIN_MARGIN = 25.0     # score gap below which a guessed line counts as uncertain
 
+# Decode confidence (#7): share of non-empty lines decoded with certainty
+# (anchored, or guessed with a margin >= UNCERTAIN_MARGIN).  All real logs so
+# far: 100 %.  A changed cipher (simulated on the real logs): 12-27 %.
+CONFIDENCE_WARN = 95.0      # percent; below this a file gets a warning
+CONFIDENCE_MIN_LINES = 20   # fewer non-empty lines: no warning (too few to judge)
+
 
 def recover(raw, mdl=None, dec=decode_line):
     """Decode one line -> (text, anchored, margin).
@@ -1051,6 +1057,11 @@ def _redaction_header(enabled, lang):
     return txt
 
 
+# file names of the log types (a file named like this that cannot be decoded
+# points to a changed log format, #7)
+_LOG_NAME = re.compile(r'^(?:GuideLog_|DebugLog_|Logs_App_).*\.txt$|\.glog$', re.I)
+
+
 def _iter_raw(path, plain):
     """Yield raw lines (bytes, no line ending).  For already-plain inputs the
     comment header written by this tool (leading '# ' lines) is skipped."""
@@ -1076,7 +1087,7 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
     categories (#20); res["leaks"] = {output name: {category: [lines]}}."""
     res = {"path": path, "kind": None, "outputs": [], "skipped": None, "report": report,
            "redactions": {c: 0 for c in CATEGORIES}, "warnings": [],
-           "lines": 0, "uncertain": 0, "leaks": None,
+           "lines": 0, "uncertain": 0, "confidence": None, "leaks": None,
            "guide": {"sessions": 0, "steps": 0, "drops": 0}}
 
     kind, plain = sniffed or sniff(path)
@@ -1084,6 +1095,10 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
     if kind == "unknown":
         res["skipped"] = "unknown"
         log(_t(lang, "skip_unknown") % os.path.basename(path))
+        if _LOG_NAME.match(os.path.basename(path)):
+            # named like a StellaVita log, but not decodable: format changed? (#7)
+            res["warnings"].append("unknown_format")
+            log(_t(lang, "warn_format"))
         return res
 
     size = os.path.getsize(path)
@@ -1096,6 +1111,7 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
     # --- GuideLog: buffer (small), decode, redact, convert ---------------
     if kind == "guide":
         decoded = []
+        filled = 0
         mdl = None if plain else train_model(path)
         for rawl in _iter_raw(path, plain):
             if plain:
@@ -1103,9 +1119,12 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
             else:
                 d, anchored, margin = recover(rawl, mdl)
             res["lines"] += 1
+            if rawl:
+                filled += 1
             if not anchored and margin < UNCERTAIN_MARGIN:
                 res["uncertain"] += 1
             decoded.append(red.feed(d))
+        _confidence(res, filled, plain)
         _check_guide_version(decoded, res, lang)
         if report:
             res["redactions"] = dict(red.counts)
@@ -1173,7 +1192,7 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
     try:
         if o:
             o.write(_redaction_header(enabled, lang))
-        done = 0
+        done = filled = 0
         mdl = None if plain else train_model(path, dec)
         for rawl in _iter_raw(path, plain):
             done += len(rawl) + 1
@@ -1184,6 +1203,8 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
             else:
                 d, anchored, margin = recover(rawl, mdl, dec)
             res["lines"] += 1
+            if rawl:
+                filled += 1
             if not anchored and margin < UNCERTAIN_MARGIN:
                 res["uncertain"] += 1
             d = red.feed(d)
@@ -1199,6 +1220,7 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
     if progress:
         progress(size, size, res["lines"])
     res["redactions"] = dict(red.counts)
+    _confidence(res, filled, plain)
     if not report:
         res["outputs"].append(dec_out)
     if report:
@@ -1207,6 +1229,19 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
         _leak_pass(res, enabled, leak_check)
         _log_done(res, lang, log)
     return res
+
+
+def _confidence(res, filled, plain):
+    """Decode confidence (#7) in percent, rounded down to 0.1 so that 100.0
+    means no uncertain line at all.  None for inputs that were not decoded.
+    Below CONFIDENCE_WARN the format has probably changed (new firmware or
+    app): the output may be garbage, and redaction cannot work on garbage."""
+    if plain or not filled:
+        return
+    conf = math.floor(1000.0 * (filled - res["uncertain"]) / filled) / 10
+    res["confidence"] = conf
+    if filled >= CONFIDENCE_MIN_LINES and conf < CONFIDENCE_WARN:
+        res["warnings"].append("low_confidence")
 
 
 def _leak_pass(res, enabled, on):
@@ -1274,23 +1309,31 @@ def process_all(files, lang="en", log=print, status=None, progress_for=None, **k
 
 def _result_state(r):
     if r["skipped"] == "unknown":
-        return "unknown"
+        return "format" if "unknown_format" in r["warnings"] else "unknown"
     if r["report"]:
         return "dry"
     return "ok" if r["outputs"] else "skipped"
 
 
+def _conf_cell(r):
+    """'100.0%', '23.4%!' below the warning threshold, '-' if not decoded."""
+    c = r.get("confidence")
+    if c is None:
+        return "-"
+    return "%.1f%%" % c + ("!" if "low_confidence" in r["warnings"] else "")
+
+
 def results_table(results, lang):
     """Summary table, one row per file.  Plain text, monospace aligned."""
-    head = [_t(lang, "col_" + c) for c in ("no", "type", "file", "lines", "uncertain")]
+    head = [_t(lang, "col_" + c) for c in ("no", "type", "file", "lines", "uncertain", "conf")]
     head += [_t(lang, "col_" + c) for c in CATEGORIES]
     head += [_t(lang, "col_leaks"), _t(lang, "col_state")]
     rows = []
     for i, r in enumerate(results, 1):
         state = _result_state(r)
-        nums = [r["lines"], r["uncertain"]] + [r["redactions"][c] for c in CATEGORIES]
+        nums = [r["lines"], r["uncertain"], _conf_cell(r)] + [r["redactions"][c] for c in CATEGORIES]
         # nothing was (fully) processed -> no numbers rather than misleading ones
-        nums = ["-"] * len(nums) if state in ("skipped", "unknown") else [str(x) for x in nums]
+        nums = ["-"] * len(nums) if state in ("skipped", "unknown", "format") else [str(x) for x in nums]
         # flagged lines of the leak check; "-" = not checked (dry run, nothing redacted)
         lk = r.get("leaks")
         nums.append("-" if lk is None else str(sum(len(v) for h in lk.values() for v in h.values())))
@@ -1303,6 +1346,98 @@ def results_table(results, lang):
         return "  ".join(c.ljust(w) if k in left else c.rjust(w)
                          for k, (c, w) in enumerate(zip(cells, width))).rstrip()
     return [fmt(head), fmt(["-" * w for w in width])] + [fmt(x) for x in rows]
+
+
+# ----------------------------------------------------------------------------
+#  Selftest (#9): built-in, fictitious sample lines in the real formats
+# ----------------------------------------------------------------------------
+
+# (kind, encrypted line, decoded line, redacted line, leak-check categories of
+# the decoded line).  The encrypted bytes are fixed here, so a broken decoder is
+# noticed even if encode_line were broken the same way.  All values invented.
+_SELFTEST = (
+    ("debug",
+     b'lDCNFKQHIHMLM{?{c26*w,:?/=)(~r#.-<DKhogpjgkqtkuvnsu}xyvz|HjhnXTq'
+     b',$~uYf\\^z5,)~BMEaJPTHHThQP`leXVZ4M17+,#}<U>c_je!iqpiGRI:,?@E>B5R'
+     b'kTyu"{d*z/0i..&b`a',
+     '[20:15:00.200] [CoreServer][RES][ipv4:192.168.77.23:44034] {"id":1,"code":0,'
+     '"CMD_GLOBAL_GET_WIFI":{"ssid":"FAKE_HOME","password":"FAKE-PASS-ONE"}}',
+     '[20:15:00.200] [CoreServer][RES][ipv4:192.168.<N1>.23:44034] {"id":1,"code":0,'
+     '"CMD_GLOBAL_GET_WIFI":{"ssid":"<SSID_1>","password":"<REDACTED>"}}',
+     ("hotspot", "network")),
+    ("debug",
+     b';qp{sx~uwuxy"Jlz{/pAibX\\jz*5zk_le!?#EQZ3(ukmqy.L0R~)}+-{}E:3}+5&'
+     b'@]AVURVXZ\\^`WL<9?PnR`medghijkli^NC[b"d~vuxyz{|}zoegYet4v)(+,-./0',
+     '[20:15:01.006] --> Number#0: name = ALT, label = Altitude, value = 42.123456, '
+     'min = -90.000000, max = 90.000000, step = 0.000000',
+     '[20:15:01.006] --> Number#0: name = ALT, label = Altitude, value = <REDACTED>, '
+     'min = -90.000000, max = 90.000000, step = 0.000000',
+     ("location",)),
+    ("debug",                           # no timestamp: key found by brute force
+     b'GHu-/3;NOPQRSnU!,)Y/MCDD',
+     '  Label      : ISO Speed',
+     '  Label      : ISO Speed',
+     ()),
+    ("guide",
+     b'+*-2*.0-27#65@8>C:@F-U&yu{#{5i-}+GY<c2"/\'o92QVXSH|@2>#9>7^cgbifg'
+     b"dY\\*MTNUbmb(GT7OP^QaFz~}#%'!t:YfIabpcsY./329;=4)Wz#{$^vw'x*mCDHG"
+     b'KMOI>l1718r,-;.>$W[Zace\\Qv>IK*:eihlnpj_&LWY*LKtxw~"$yn5geFV#(-)x'
+     b'#S&*}DvtGih37(13+,-a%q%_t)*CMMMMMMI>r6#5uqvRWZ\\W_aXM#E3EwGHbf',
+     '2026-01-15 20:16:05: Guiding Step-> FrameNum-12, StepTime-14.400, "Mount", '
+     'CamOffsetX-0.123, CamOffsetY--0.456, MountOffsetX--0.123, MountOffsetY-0.456, '
+     'DistRa-0.123, DistDec-0.456, DurRa-150 (W), DurDec-0 ()   StarMass-654321, '
+     'StarSNR-134.56, StarErr-0',
+     None,                              # None: unchanged by redaction
+     ()),
+    ("app",                             # non-ASCII, double-encoded UTF-8
+     b'769>6:<9>C/BALDIOGG87:h}(.b#/(6&e*<2@4@FL\xc3\xa7\xc2\x9b\xc2\xb8\xc3\xa6\xc2\x9c\xc2\xbaM3@@A98J<<c'
+     b'XOAJNDRBVXVJdr{ux\xc3\xa2\xc2\x84\xc2\x83i[X',
+     '2026-01-15 20:15:10 | MainCameraActivity 相机 connected, temperature -5.0℃ ok',
+     None,
+     ()),
+    ("app",
+     b"xwz!w{}z!&p%$/',2*+yx{@nxEgymhkTiwkrq!.Q$zvzy5_gR9KKJMLSRNR",
+     '2026-01-15 20:15:11 | BoxDeviceManager Bridge IP: 10.0.42.1',
+     '2026-01-15 20:15:11 | BoxDeviceManager Bridge IP: 10.0.<N1>.1',
+     ("network",)),
+)
+
+
+def selftest():
+    """Decode, redact and leak-check the built-in sample lines.
+    Returns (number of checks, [names of the failed checks])."""
+    failed = []
+    n = 0
+
+    def ok(name, cond):
+        nonlocal n
+        n += 1
+        if not cond:
+            failed.append(name)
+    for i, (kind, raw, plain, red, cats) in enumerate(_SELFTEST, 1):
+        app = kind == "app"
+        tag = "%d/%s" % (i, kind)
+        try:
+            d, anchored, margin = recover(raw, None, decode_app_line if app else decode_line)
+            ok(tag + " decode", d == plain)
+            ok(tag + " certain", anchored or margin >= UNCERTAIN_MARGIN)
+            r = Redactor(CATEGORIES, app=app).feed(plain)
+            ok(tag + " redact", r == (plain if red is None else red))
+            ok(tag + " leak check", _leak_cats(plain, {}) == set(cats)
+               and not _leak_cats(r, {}))
+        except Exception as e:      # a crash is a failed selftest, not a traceback
+            failed.append("%s %s" % (tag, type(e).__name__))
+    return n, failed
+
+
+def selftest_ok(lang, log, quiet=True):
+    """Run the selftest; log the result (only failures if quiet).  True = passed."""
+    n, failed = selftest()
+    if failed:
+        log(_t(lang, "selftest_fail") % (len(failed), n, ", ".join(failed)))
+    elif not quiet:
+        log(_t(lang, "selftest_ok") % (len(_SELFTEST), n))
+    return not failed
 
 
 # ----------------------------------------------------------------------------
@@ -1374,6 +1509,22 @@ _STR = {
     "col_location": {"de": "Ort", "en": "Loc"},
     "col_serial": {"de": "SerNr", "en": "Serial"},
     "col_leaks": {"de": "Reste", "en": "Leaks"},
+    "col_conf": {"de": "sicher", "en": "Conf"},
+    "stat_conf": {"de": "Decodier-Sicherheit %.1f %%", "en": "decode confidence %.1f%%"},
+    "warn_conf": {"de": "  ! Decodier-Sicherheit nur %.1f %% (Schwelle %.0f %%): das Logformat hat sich "
+                        "vermutlich geändert (neue Firmware/App?). Ausgabe prüfen – "
+                        "die Schwärzung kann unvollständig sein.",
+                  "en": "  ! Decode confidence only %.1f%% (threshold %.0f%%): the log format has "
+                        "probably changed (new firmware/app?). Check the output - "
+                        "redaction may be incomplete."},
+    "selftest_ok": {"de": "Selbsttest: OK (%d Beispielzeilen, %d Prüfungen)",
+                    "en": "Selftest: OK (%d sample lines, %d checks)"},
+    "selftest_fail": {"de": "Selbsttest FEHLGESCHLAGEN (%d von %d Prüfungen): %s\n"
+                            "Das Werkzeug decodiert oder schwärzt nicht korrekt; "
+                            "es wird nichts verarbeitet.",
+                      "en": "Selftest FAILED (%d of %d checks): %s\n"
+                            "The tool does not decode or redact correctly; "
+                            "nothing is processed."},
     "leak_head": {"de": "  ! Nachprüfung: vermutlich persönliche Daten übrig in %s – vor dem Weitergeben prüfen:",
                   "en": "  ! Leak check: possible personal data left in %s - check before sharing:"},
     "leak_lines": {"de": "Zeilen", "en": "lines"},
@@ -1381,6 +1532,11 @@ _STR = {
     "state_dry": {"de": "Probelauf", "en": "dry run"},
     "state_skipped": {"de": "existiert", "en": "exists"},
     "state_unknown": {"de": "unbekannt", "en": "unknown"},
+    "state_format": {"de": "Format geändert?", "en": "format changed?"},
+    "warn_format": {"de": "  ! Der Dateiname passt zu einem StellaVita-Log, der Inhalt lässt sich aber "
+                          "nicht decodieren: Logformat geändert (neue Firmware/App?)",
+                    "en": "  ! The file name matches a StellaVita log, but the content cannot be "
+                          "decoded: log format changed (new firmware/app?)"},
     "gpl_notice": {"de": "DecoVita v%s - %s\n"
                           "Dieses Programm kommt OHNE JEDE GEWÄHRLEISTUNG. Es ist freie "
                           "Software (GPL-3.0-or-later); Weitergabe unter deren Bedingungen "
@@ -1423,20 +1579,34 @@ def _log_done(res, lang, log):
     cs = _cat_summary(res["redactions"], lang)
     if cs:
         log("  " + cs)
-    log("  %d %s, %d %s" % (res["lines"], _t(lang, "stat_lines"),
-                            res["uncertain"], _t(lang, "stat_uncertain")))
+    log(_stat_line(res, lang))
     g = res["guide"]
     if g["sessions"] or g["steps"]:
         log("  %s: %d/%d/%d" % (_t(lang, "stat_guide"),
                                 g["sessions"], g["steps"], g["drops"]))
-    for w in res["warnings"]:
-        log("  ! " + w)
+    _log_warnings(res, lang, log)
     for name, hits in sorted((res.get("leaks") or {}).items()):
         log(_t(lang, "leak_head") % name)
         for c in CATEGORIES:
             if c in hits:
                 log("      %s %d (%s %s)" % (_t(lang, "cat_" + c), len(hits[c]),
                                             _t(lang, "leak_lines"), _line_list(hits[c])))
+
+
+def _stat_line(res, lang):
+    txt = "  %d %s, %d %s" % (res["lines"], _t(lang, "stat_lines"),
+                              res["uncertain"], _t(lang, "stat_uncertain"))
+    if res.get("confidence") is not None:
+        txt += ", " + _t(lang, "stat_conf") % res["confidence"]
+    return txt
+
+
+def _log_warnings(res, lang, log):
+    for w in res["warnings"]:
+        if w == "low_confidence":
+            log(_t(lang, "warn_conf") % (res["confidence"], CONFIDENCE_WARN))
+        else:
+            log("  ! " + w)
 
 
 def _line_list(nums, limit=10):
@@ -1450,8 +1620,8 @@ def _log_report(res, lang, log):
     log(_t(lang, "report_head") % os.path.basename(res["path"]))
     cs = _cat_summary(res["redactions"], lang)
     log("  " + (cs if cs else "-"))
-    log("  %d %s, %d %s" % (res["lines"], _t(lang, "stat_lines"),
-                            res["uncertain"], _t(lang, "stat_uncertain")))
+    log(_stat_line(res, lang))
+    _log_warnings(res, lang, log)
 
 
 def default_lang():
@@ -1487,6 +1657,9 @@ def build_parser():
                    help="turn off all redaction")
     p.add_argument("--no-leak-check", dest="leak_check", action="store_false",
                    help="skip the check of the outputs for leftover personal data")
+    p.add_argument("--selftest", action="store_true",
+                   help="check decoding, redaction and leak check on built-in fictitious "
+                        "sample lines, then exit (also runs silently before every run)")
     for c in CATEGORIES:
         p.add_argument("--no-redact-" + c, dest="red_" + c, action="store_false",
                        help="do not redact %s" % c)
@@ -1505,6 +1678,8 @@ def run_cli(a):
     if not files:
         print(_t(a.lang, "no_files"))
         return 1
+    if not selftest_ok(a.lang, print):
+        return 2
     enabled = enabled_from_args(a)
     warn_unredacted(enabled, a.lang, print)
     t0 = time.time()
@@ -1571,6 +1746,8 @@ def run_menu(lang):
     if not files:
         print(_t(lang, "no_files"))
         return 1
+    if not selftest_ok(lang, print):
+        return 2
     warn_unredacted(enabled, lang, print)
     t0 = time.time()
     res = process_all(files, lang=lang, progress_for=lambda f: _big_progress(f, lang),
@@ -1717,6 +1894,8 @@ def build_gui(root, lang):
         files = gather([p], v_rec.get())
         if not files:
             logw(_t(lang, "no_files")); return
+        if not selftest_ok(lang, logw):
+            return
         warn_unredacted(enabled, lang, logw)
         bar["value"] = 0
         res = process_all(files, lang=lang, log=logw, status=status,
@@ -1760,6 +1939,8 @@ def main(argv=None):
             pass
     argv = sys.argv[1:] if argv is None else argv
     a = build_parser().parse_args(argv)
+    if a.selftest:
+        return 0 if selftest_ok(a.lang, print, quiet=False) else 1
     if a.paths:
         return run_cli(a)
     # no paths -> interactive
