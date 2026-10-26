@@ -93,6 +93,7 @@ into a FAIL, and `DV_TEST_SHOTS=<dir>` stores GUI screenshots (Linux: ImageMagic
   midnight rollover.
 - **Redaction:** `Redactor` is streaming and stateful, with one method per category:
   `_do_hotspot`, `_do_network`, `_do_location`, `_do_serial`, plus `_stray_ssids`;
+  placeholder numbering comes from a `Placeholders` shared per run (#21);
   `Redactor(enabled, app=True)` adds `_do_app` (app-log formats, MAC -> `<MAC_n>`).
 - **PHD2 conversion:** `convert_to_phd2(lines, stats)`.
 - **Orchestration:** `process_file(...)` (one file), `process_all(files, ...)` (several
@@ -235,10 +236,26 @@ Redaction is on by default. There are four categories (`CATEGORIES`), each with
 its own switch: `--no-redact-hotspot|network|location|serial`, plus `--no-redact`
 for all of them.
 
+### Placeholders (#21)
+
+- `Placeholders` holds the value -> placeholder maps (`<SSID_n>`, subnet `N<n>`,
+  `<MAC_n>`). `process_all` creates one per run and passes it to every
+  `process_file`, so the same value gets the same placeholder in all outputs of the
+  run; numbering = order of first appearance (so it depends on the file order).
+  A single `process_file` call without one gets its own.
+- A known SSID learned in an earlier file is also replaced as a stray occurrence in
+  later files of the run.
+- The mapping stays in memory: never written, logged or printed (`repr` shows counts
+  only).
+- `Placeholders.PATTERN` matches every placeholder the redactor emits; new
+  placeholder kinds (#25) and the leak check (#20) must use it.
+- IPs keep the 3rd-octet scheme (`192.168.<N1>.23`), no whole-address `<IP_n>`
+  (maintainer decision 2026-10-26, keeps the output format compatible).
+
 ### hotspot
 
-- Values of keys matching `*ssid` become `<SSID_n>`. Numbering is consistent per run,
-  so the hotspot and the home network stay distinguishable.
+- Values of keys matching `*ssid` become `<SSID_n>`, so the hotspot and the home
+  network stay distinguishable.
 - Keys seen in real data: `ssid`, `wifi_ssid`, `connecting_bridge_wifi_ssid`,
   `connected_bridge_wifi_ssid`.
 - Stray occurrences elsewhere are replaced too: longest value first (one SSID can be
