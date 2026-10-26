@@ -127,6 +127,10 @@ belong in the repository (see `.gitignore`).
 python test_decovita.py
 ```
 
+The window tests need tkinter; on Linux also `Xvfb` (otherwise they are reported as
+SKIP). On Windows and macOS they open briefly on the desktop. Every pull request is
+tested automatically on Linux and Windows (GitHub Actions).
+
 ## Contributing
 
 Bug reports, ideas and pull requests are welcome, via

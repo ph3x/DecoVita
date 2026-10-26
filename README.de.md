@@ -130,6 +130,10 @@ gehören nicht ins Repo (siehe `.gitignore`).
 python test_decovita.py
 ```
 
+Die Fenster-Tests brauchen tkinter, unter Linux zusätzlich `Xvfb` (sonst werden sie
+als SKIP gemeldet). Unter Windows und macOS öffnen sie sich kurz auf dem Desktop.
+Jeder Pull Request wird automatisch unter Linux und Windows getestet (GitHub Actions).
+
 ## Mitmachen
 
 Fehlermeldungen, Ideen und Pull Requests sind willkommen, über

@@ -1,0 +1,65 @@
+# SPDX-FileCopyrightText: 2026 ph3x
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# Full test suite (incl. GUI tests) on Linux and Windows for every pull request
+# and every push to main (#28). GUI screenshots are uploaded as run artifacts.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# a new push to the same branch/PR cancels the run that is still going
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # oldest and newest supported Python on Linux; Windows minutes count
+          # double, so one version there (<= 3.14 still defaults to cp1252)
+          - { os: ubuntu-latest, python: "3.11" }
+          - { os: ubuntu-latest, python: "3.14" }
+          - { os: windows-latest, python: "3.14" }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install Xvfb and ImageMagick (GUI tests, screenshots)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb imagemagick
+
+      - name: Show Python and Tk
+        run: python -c "import sys, tkinter; print(sys.version); print('Tk', tkinter.TkVersion)"
+
+      - name: Run test suite
+        env:
+          DV_TEST_SHOTS: ${{ runner.temp }}/screenshots
+          DV_TEST_REQUIRE_GUI: "1"
+        run: python test_decovita.py
+
+      - name: Upload GUI screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screenshots-${{ matrix.os }}-py${{ matrix.python }}
+          path: ${{ runner.temp }}/screenshots
+          if-no-files-found: warn
+          retention-days: 14
