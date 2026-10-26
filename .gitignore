@@ -1,10 +1,12 @@
 # Logs and tool outputs can contain personal data - never commit
 GuideLog_*
 DebugLog_*
+Logs_App_*
 *.glog
 *_decoded.txt
 *_phd2.txt
 *_redacted*
+*_plain*
 logs/
 *.zip
 *.bz2
