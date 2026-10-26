@@ -17,8 +17,25 @@ des ToupTek StellaVita. Keine Verbindung zu ToupTek.
 ## Voraussetzungen
 
 - Python 3.11 oder neuer (getestet mit 3.11 bis 3.14), nur Standardbibliothek
-- Für das Fenster: tkinter. Unter Arch/CachyOS ist das das Paket `tk`. Ohne
-  tkinter oder ohne Bildschirm startet stattdessen ein Textmenü.
+- Für das Fenster: tkinter (Pythons Schnittstelle zu Tcl/Tk). Ohne tkinter oder
+  ohne Bildschirm nennt `python decovita.py` den Grund und startet stattdessen
+  ein Textmenü. Die Kommandozeile (`python decovita.py <Datei|Ordner>`) braucht
+  nie tkinter.
+
+So prüfst du, ob dein Python tkinter hat:
+
+```
+python -c "import tkinter; print(tkinter.TkVersion)"   # gibt z. B. 8.6 aus
+python -m tkinter                                      # öffnet ein kleines Testfenster
+```
+
+Scheitert der erste Befehl mit `ModuleNotFoundError`, fehlt tkinter:
+
+- Windows (Installer von python.org): Installer erneut starten, „Modify“
+  wählen und „tcl/tk and IDLE“ anhaken (standardmäßig angehakt).
+- Linux: tkinter ist meist ein eigenes Paket, z. B. `tk` unter Arch/CachyOS,
+  `python3-tk` unter Debian/Ubuntu.
+- macOS: nicht getestet.
 
 ## Benutzung
 
