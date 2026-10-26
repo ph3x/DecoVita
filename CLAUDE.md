@@ -26,8 +26,15 @@ python test_decovita.py [path/to/decovita.py]   # run ALL tests after every chan
 ```
 
 Supported Python: tested on 3.11, 3.12, 3.13, 3.14. The GUI needs tkinter, which on
-Arch/CachyOS requires the system package `tk`. GUI tests also need `Xvfb`;
-without tkinter or Xvfb those tests are reported as SKIP, not FAIL.
+Arch/CachyOS requires the system package `tk`. On Linux the GUI tests also need `Xvfb`;
+on Windows and macOS they run directly on the desktop session. Without tkinter (or
+Xvfb on Linux) those tests are reported as SKIP, not FAIL.
+
+**CI** (`.github/workflows/tests.yml`, #28): every pull request and every push to `main`
+runs the full suite incl. GUI tests on `ubuntu-latest` (Python 3.11 and 3.14, Xvfb) and
+`windows-latest` (Python 3.14). There `DV_TEST_REQUIRE_GUI=1` turns a skipped GUI test
+into a FAIL, and `DV_TEST_SHOTS=<dir>` stores GUI screenshots (Linux: ImageMagick
+`import`, Windows: PowerShell), uploaded as run artifacts.
 
 ## Ground rules
 
@@ -97,7 +104,8 @@ without tkinter or Xvfb those tests are reported as SKIP, not FAIL.
 - **User interfaces:** `build_parser` / `run_cli`, `run_menu` (text fallback),
   `run_gui` (tkinter). `main()` picks the UI.
 - **Test hooks:** env vars `DV_GUI_AUTOCLOSE=<ms>` and `DV_GUI_AUTORUN=<path>`.
-  These are used only by the test suite.
+  These are used only by the test suite. The suite itself reads `DV_TEST_SHOTS` and
+  `DV_TEST_REQUIRE_GUI` (see Commands).
 
 ## Log encryption (reverse-engineered from the files, no documentation)
 
@@ -353,8 +361,14 @@ phdlogview ignores these lines. When the tool reads its own output again, it ski
 - **Coverage:** cipher, type detection, exact decoding, redaction per
   category, redaction in doubt, category switches, output header, GuideLog location
   kept, dates/rollover, PHD2 conversion, files, dry run, version check, CLI,
-  progress/i18n, text menu (incl. tkinter-without-display), GUI under Xvfb.
-- **Last run:** 198/198 passed on Python 3.14.7 with Xvfb (2026-10-10).
+  progress/i18n, text menu (incl. tkinter-without-display), GUI under Xvfb or on the
+  native desktop (Windows/macOS).
+- **Portability:** every subprocess goes through `run()`: UTF-8 pipes on every platform
+  (Windows with Python <= 3.14 defaults to cp1252 and breaks on `℃`) and a timeout,
+  so a window that waits for input fails the check instead of hanging the suite. The
+  test "tkinter without display" is skipped on Windows/macOS: removing `DISPLAY` hides
+  nothing there.
+- **Last run:** 263/263 passed on Python 3.12.3 with Xvfb (2026-10-26); CI results: see the Actions tab.
 - **Fixtures:** built in a temp dir from fake plaintext and encrypted with `encode_line`.
   All values are invented (e.g. `FAKE_HOME`/`FAKE_HOME_EXT`, `FAKESERIAL…`,
   `192.168.77.x`).

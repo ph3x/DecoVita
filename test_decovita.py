@@ -52,6 +52,44 @@ def quiet(*a, **k):
     pass
 
 
+# Test names and details contain non-ASCII text (e.g. '℃'). On Windows with
+# Python <= 3.14 a redirected stdout defaults to cp1252 and would crash on it.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except Exception:
+        pass
+
+SUBPROCESS_TIMEOUT = 120
+
+
+def run(args, timeout=SUBPROCESS_TIMEOUT, env=None, **kw):
+    """subprocess.run for the tests: pipes are UTF-8 on every platform (the child
+    is forced to UTF-8 even if env says otherwise) and a hanging child (e.g. a
+    window waiting for input) ends as a failed result instead of blocking the
+    whole suite."""
+    env = dict(os.environ if env is None else env, PYTHONIOENCODING="utf-8")
+    kw.setdefault("capture_output", True)
+    try:
+        return subprocess.run(args, text=True, encoding="utf-8", errors="replace",
+                              env=env, timeout=timeout, **kw)
+    except subprocess.TimeoutExpired as e:
+        out, err = e.stdout or "", e.stderr or ""
+        if isinstance(out, bytes):
+            out = out.decode("utf-8", "replace")
+        if isinstance(err, bytes):
+            err = err.decode("utf-8", "replace")
+        return subprocess.CompletedProcess(args, None, out, err + "\nTIMEOUT after %ss" % timeout)
+
+
+def gui_display(platform, have_xvfb):
+    """How the window tests get a display: 'native' on Windows/macOS (Tk draws on
+    the desktop session, no X server), 'xvfb' on X11 systems with Xvfb, else None."""
+    if platform == "win32" or platform == "darwin":
+        return "native"
+    return "xvfb" if have_xvfb else None
+
+
 def sha(path):
     return hashlib.sha256(open(path, "rb").read()).hexdigest()
 
@@ -839,20 +877,20 @@ def t_version(fx, tmp):
 def t_cli(fx, tmp):
     print("\n[14] Command line")
     py = sys.executable
-    p = subprocess.run([py, TOOL, "--help"], capture_output=True, text=True)
+    p = run([py, TOOL, "--help"])
     check("--help", p.returncode == 0 and "--no-redact-location" in p.stdout)
     check("--help: license notice", "GPL-3.0-or-later" in p.stdout and "NO WARRANTY" in p.stdout)
     check("--help: -o creates the folder if missing", "created if missing" in " ".join(p.stdout.split()))
     out = os.path.join(tmp, "o_cli")
     nested = os.path.join(tmp, "o_cli_new", "a", "b")
-    p = subprocess.run([py, TOOL, fx["glog"], "-o", nested], capture_output=True, text=True)
+    p = run([py, TOOL, fx["glog"], "-o", nested])
     check("-o: missing (nested) folder is created",
           p.returncode == 0 and os.listdir(nested) == ["libtoupcam_latest_redacted.glog"],
           (p.stderr or p.stdout)[-300:])
     nested_rep = os.path.join(tmp, "o_cli_rep_new", "a")
-    subprocess.run([py, TOOL, fx["glog"], "-o", nested_rep, "--report"], capture_output=True, text=True)
+    run([py, TOOL, fx["glog"], "-o", nested_rep, "--report"])
     check("-o with --report: folder is not created", not os.path.exists(os.path.dirname(nested_rep)))
-    p = subprocess.run([py, TOOL, fx["dir"], "-o", out, "--lang", "de"], capture_output=True, text=True)
+    p = run([py, TOOL, fx["dir"], "-o", out, "--lang", "de"])
     check("folder run exit code 0", p.returncode == 0, p.stderr[-300:])
     check("German messages", "Fertig:" in p.stdout, p.stdout[:200])
     made = sorted(os.listdir(out))
@@ -860,8 +898,8 @@ def t_cli(fx, tmp):
           {"GuideLog_2026-01-15_201500_decoded.txt", "GuideLog_2026-01-15_201500_phd2.txt",
            "DebugLog_2026-01-15_201500_decoded.txt", "libtoupcam_latest_redacted.glog"} <= set(made), str(made))
     check("unknown file reported", "notes.txt" in p.stdout)
-    p = subprocess.run([py, TOOL, fx["debug"], "-o", out, "--lang", "en", "--force",
-                        "--no-redact-network"], capture_output=True, text=True)
+    p = run([py, TOOL, fx["debug"], "-o", out, "--lang", "en", "--force",
+                        "--no-redact-network"])
     txt = open(os.path.join(out, "DebugLog_2026-01-15_201500_decoded.txt"), encoding="utf-8").read()
     check("--no-redact-network works", FAKE["ip_dev"] in txt and FAKE["ssid_long"] not in txt)
     check("English messages", "Done:" in p.stdout, p.stdout[:200])
@@ -871,14 +909,12 @@ def t_cli(fx, tmp):
     check("CLI: stdout free of control characters (redirect-safe)",
           all(ch.isprintable() or ch == "\n" for ch in p.stdout))
     check("singular for one file ('1 file')", "(1 file," in p.stdout, p.stdout[-80:])
-    p = subprocess.run([py, TOOL, fx["glog"], "-o", os.path.join(tmp, "o_cli_nr"), "--lang", "de", "--no-redact"],
-                       capture_output=True, text=True)
+    p = run([py, TOOL, fx["glog"], "-o", os.path.join(tmp, "o_cli_nr"), "--lang", "de", "--no-redact"])
     check("--no-redact: warning during the run", "ACHTUNG: nicht geschwärzt" in p.stdout, p.stdout[:200])
-    p = subprocess.run([py, TOOL, fx["glog"], "-o", os.path.join(tmp, "o_cli_all"), "--lang", "de"],
-                       capture_output=True, text=True)
+    p = run([py, TOOL, fx["glog"], "-o", os.path.join(tmp, "o_cli_all"), "--lang", "de"])
     check("default run: no warning", "ACHTUNG" not in p.stdout, p.stdout[:200])
     out2 = os.path.join(tmp, "o_cli_rep")
-    p = subprocess.run([py, TOOL, fx["debug"], "-o", out2, "--report"], capture_output=True, text=True)
+    p = run([py, TOOL, fx["debug"], "-o", out2, "--report"])
     check("--report writes nothing", not os.path.exists(out2) or os.listdir(out2) == [])
 
 
@@ -938,9 +974,26 @@ def t_progress_i18n(fx, tmp):
         check("progress line %s: '%s'" % (lang.upper(), word), ("1234 " + word) in buf.getvalue(), buf.getvalue())
     empty = os.path.join(tmp, "empty_dir")
     os.makedirs(empty)
-    p = subprocess.run([sys.executable, TOOL, empty, "--lang", "de"], capture_output=True, text=True)
+    p = run([sys.executable, TOOL, empty, "--lang", "de"])
     check("empty folder: German message", "Keine Logdateien gefunden." in p.stdout and p.returncode == 1,
           p.stdout[:200])
+
+
+def t_harness():
+    print("\n[0] Test harness (Windows / CI robustness, #28)")
+    py = sys.executable
+    p = run([py, "-c", "print('-5.0\u2103 GEW\u00c4HR')"], env=dict(os.environ, PYTHONIOENCODING="cp1252"))
+    check("run(): child output is UTF-8 even if the platform default is not (cp1252)",
+          p.returncode == 0 and p.stdout.strip() == "-5.0\u2103 GEW\u00c4HR", repr(p.stdout) + p.stderr[-200:])
+    check("test output stream is UTF-8", (sys.stdout.encoding or "").lower().replace("-", "") == "utf8",
+          str(sys.stdout.encoding))
+    p = run([py, "-c", "import time; print('started', flush=True); time.sleep(30)"], timeout=2)
+    check("run(): a hanging child ends as a failed result, not a hang",
+          p.returncode is None and "TIMEOUT" in p.stderr and "started" in p.stdout, repr(p))
+    check("window tests: native display on Windows and macOS (no Xvfb needed)",
+          gui_display("win32", False) == "native" and gui_display("darwin", False) == "native")
+    check("window tests: Xvfb on Linux, skip without it",
+          gui_display("linux", True) == "xvfb" and gui_display("linux", False) is None)
 
 
 def t_menu(fx, tmp):
@@ -956,7 +1009,7 @@ def t_menu(fx, tmp):
     os.makedirs(work)
     shutil.copy(fx["guide"], work)
     feed = work + "\n" + "n\n" + "\n" + "\n"           # folder, no recurse, redact all, PHD2 yes
-    p = subprocess.run([sys.executable, TOOL], input=feed, capture_output=True, text=True, env=env)
+    p = run([sys.executable, TOOL], input=feed, env=env)
     made = sorted(os.listdir(work))
     check("menu runs without tkinter", p.returncode == 0, p.stderr[-300:])
     check("menu writes outputs", any(m.endswith("_phd2.txt") for m in made), str(made))
@@ -978,14 +1031,17 @@ def t_menu(fx, tmp):
         have_tk = False
     if not have_tk:
         skip("tkinter without display -> menu", "tkinter not installed in this Python")
+    elif gui_display(sys.platform, False) == "native":
+        # Windows/macOS: Tk draws on the desktop session, removing DISPLAY hides nothing
+        skip("tkinter without display -> menu", "native display on %s cannot be removed" % sys.platform)
     else:
-        env2 = dict(os.environ, LANG="de_AT.UTF-8")
+        # if a window opens after all, close it so the check fails instead of hanging
+        env2 = dict(os.environ, LANG="de_AT.UTF-8", DV_GUI_AUTOCLOSE="3000")
         env2.pop("DISPLAY", None)
         work2 = os.path.join(tmp, "menu_nodisp")
         os.makedirs(work2)
         shutil.copy(fx["glog"], work2)
-        p = subprocess.run([sys.executable, TOOL], input=work2 + "\nn\n\n\n", capture_output=True,
-                           text=True, env=env2)
+        p = run([sys.executable, TOOL], input=work2 + "\nn\n\n\n", env=env2)
         check("tkinter without display: GPL notice at start (DE)",
               "OHNE JEDE GEWÄHRLEISTUNG" in p.stdout, p.stdout[:300])
         check("tkinter without display: reason shown", "kein Bildschirm" in p.stdout, p.stdout[:300])
@@ -995,35 +1051,48 @@ def t_menu(fx, tmp):
               any(m.endswith("_redacted.glog") for m in os.listdir(work2)), str(os.listdir(work2)))
 
 
+def skip_gui(why):
+    """CI sets DV_TEST_REQUIRE_GUI=1: there a missing GUI is a failure, not a skip."""
+    if os.environ.get("DV_TEST_REQUIRE_GUI"):
+        check("window tests available (DV_TEST_REQUIRE_GUI)", False, why)
+    else:
+        skip("window tests", why)
+
+
 def t_gui(fx, tmp):
     print("\n[16] Window (tkinter)")
     try:
         import tkinter  # noqa
     except Exception:
-        skip("window tests", "tkinter not installed in this Python")
+        skip_gui("tkinter not installed in this Python")
         return
-    if not shutil.which("Xvfb"):
-        skip("window tests", "Xvfb not available")
+    mode = gui_display(sys.platform, bool(shutil.which("Xvfb")))
+    if mode is None:
+        skip_gui("Xvfb not available")
         return
-    disp = ":97"
-    xv = subprocess.Popen(["Xvfb", disp, "-screen", "0", "1024x768x24"],
-                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    xv = None
+    env = dict(os.environ, DV_GUI_AUTOCLOSE="1500")
+    if mode == "xvfb":
+        disp = ":97"
+        xv = subprocess.Popen(["Xvfb", disp, "-screen", "0", "1024x768x24"],
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        env["DISPLAY"] = disp
     try:
         import time
         time.sleep(1)
-        env = dict(os.environ, DISPLAY=disp, DV_GUI_AUTOCLOSE="1500")
-        p = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, env=env, timeout=60)
+        p = run([sys.executable, TOOL], env=env)
         check("window starts and closes cleanly", p.returncode == 0, p.stderr[-300:])
         work = os.path.join(tmp, "gui_in")
         os.makedirs(work)
         shutil.copy(fx["guide"], work)
         env = dict(env, DV_GUI_AUTORUN=work, DV_GUI_AUTOCLOSE="6000")
-        p = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, env=env, timeout=60)
+        p = run([sys.executable, TOOL], env=env)
         made = sorted(os.listdir(work))
         check("window run writes outputs", any(m.endswith("_phd2.txt") for m in made), str(made) + p.stderr[-200:])
         _gui_layout_and_outdir(fx, tmp, env)
     finally:
-        xv.terminate()
+        if xv:
+            xv.terminate()
 
 
 # Runs inside a subprocess on the Xvfb display; prints one JSON object.
@@ -1033,7 +1102,34 @@ spec = importlib.util.spec_from_file_location("sv", sys.argv[1])
 sv = importlib.util.module_from_spec(spec); spec.loader.exec_module(sv)
 import tkinter as tk
 src, out_new, out_file, lang = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
-res = {}
+res = {"shots": []}
+SHOTS = os.environ.get("DV_TEST_SHOTS")
+
+def shot(root, name):
+    """Optional screenshot of the whole screen (CI artifact): DV_TEST_SHOTS=<folder>.
+    Linux: ImageMagick 'import'; Windows: PowerShell + System.Drawing."""
+    if not SHOTS:
+        return
+    import subprocess, time
+    os.makedirs(SHOTS, exist_ok=True)
+    path = os.path.join(SHOTS, name + ".png")
+    root.lift(); root.update(); time.sleep(0.5); root.update()
+    if sys.platform == "win32":
+        ps = ("Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
+              "$b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; "
+              "$i=New-Object System.Drawing.Bitmap $b.Width,$b.Height; "
+              "$g=[System.Drawing.Graphics]::FromImage($i); "
+              "$g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size); "
+              "$i.Save('%s',[System.Drawing.Imaging.ImageFormat]::Png)" % path.replace("'", "''"))
+        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps]
+    else:
+        cmd = ["import", "-window", "root", path]
+    try:
+        p = subprocess.run(cmd, capture_output=True, timeout=60)
+        err = p.stderr.decode("utf-8", "replace")[-200:]
+    except Exception as e:
+        err = repr(e)
+    res["shots"].append([name, os.path.isfile(path) and os.path.getsize(path) > 0, err])
 
 def visible(root, w):
     """Mapped and fully inside the window's client area."""
@@ -1058,6 +1154,7 @@ for scale in (1.3333, 1.6667, 2.0):
             "req": [root.winfo_reqwidth(), root.winfo_reqheight()],
             "widgets": all(visible(root, w) for w in g.all_widgets()),
             "entries": [[e.winfo_rootx(), e.winfo_width()] for e in (g.ent_src, g.ent_out)]}
+        shot(root, "layout_%s_%s_%s" % (lang, scale, name))
     root.destroy()
 root = tk.Tk()
 g = sv.build_gui(root, lang)
@@ -1079,6 +1176,7 @@ res["file_msg"] = g.text.get("1.0", "end").strip()
 g.out.set(out_new); g.force.set(True); g.sel.set(os.path.dirname(src)); g.go(report=True); root.update()
 res["run_log"] = g.text.get("1.0", "end")
 res["run_status"] = g.status.get()
+shot(root, "run_%s" % lang)
 root.destroy()
 print(json.dumps(res))
 '''
@@ -1094,8 +1192,7 @@ def _gui_layout_and_outdir(fx, tmp, env):
     out_file = os.path.join(tmp, "gui_probe_isfile")
     write(out_file, "x")
     env = {k: v for k, v in env.items() if not k.startswith("DV_GUI_")}
-    p = subprocess.run([sys.executable, "-c", _GUI_PROBE, TOOL, src, out_new, out_file, "de"],
-                       capture_output=True, text=True, env=env, timeout=60)
+    p = run([sys.executable, "-c", _GUI_PROBE, TOOL, src, out_new, out_file, "de"], env=env)
     try:
         r = json.loads(p.stdout.strip().splitlines()[-1])
     except Exception:
@@ -1127,6 +1224,9 @@ def _gui_layout_and_outdir(fx, tmp, env):
           re.match(r"\(1 Datei, [\d.]+s\)$", r["run_status"]) is not None, r["run_status"])
     check("output folder is a file: message, no run",
           r["file_msg"].startswith("Zielordner ist eine Datei:"), r["file_msg"][:200])
+    if os.environ.get("DV_TEST_SHOTS"):
+        check("window: screenshots written to DV_TEST_SHOTS (%d)" % len(r["shots"]),
+              len(r["shots"]) == 10 and all(ok for _, ok, _ in r["shots"]), str(r["shots"])[:400])
 
 
 def t_app(fx, tmp):
@@ -1284,6 +1384,7 @@ def main():
     tmp = tempfile.mkdtemp(prefix="svtest_")
     try:
         fx = build_fixtures(tmp)
+        t_harness()
         t_cipher()
         t_sniff(fx)
         t_decode_exact(fx, tmp)
