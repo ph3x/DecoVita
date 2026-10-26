@@ -200,13 +200,16 @@ Jeder Pull Request wird automatisch unter Linux und Windows getestet (GitHub Act
 Fehlermeldungen, Ideen und Pull Requests sind willkommen, über
 [GitHub Issues](https://github.com/ph3x/DecoVita/issues) und Pull Requests.
 
-- **Fehlermeldungen:** bitte DecoVita-Version (Fenstertitel oder `--help`),
-  Betriebssystem, Python-Version, den verwendeten Befehl bzw. die Schritte sowie
-  die Meldung oder die Übersichtstabelle angeben.
+- **Fehlermeldungen:** bitte das Formular für Fehlermeldungen nutzen. Es fragt
+  nach DecoVita-Version (Fenstertitel oder `--help`), Betriebssystem,
+  Python-Version, dem verwendeten Befehl bzw. den Schritten sowie der Meldung oder
+  der Übersichtstabelle.
 - **Niemals Original-Logs anhängen.** Sie enthalten deine WLAN-Namen,
   Netzwerkadressen, deinen Standort und Seriennummern. Wird ein Log-Auszug
   gebraucht, nimm die geschwärzte Ausgabe des Tools und prüfe sie Zeile für Zeile,
-  bevor du sie postest. Issues sind öffentlich.
+  bevor du sie postest. Dateinamen der Logs enthalten Datum und Uhrzeit deiner
+  Sitzung, ersetze sie also (auch in der Übersichtstabelle). Issues sind
+  öffentlich.
 - **Pull Requests:** `python test_decovita.py` ausführen (alle Tests müssen
   bestehen), für jede Korrektur und jede Funktion einen Test ergänzen, nur
   Standardbibliothek, Code und Kommentare auf Englisch, Texte für Nutzer auf

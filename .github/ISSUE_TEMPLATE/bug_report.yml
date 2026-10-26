@@ -1,0 +1,83 @@
+# SPDX-FileCopyrightText: 2026 ph3x
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Bug report
+description: Something does not work as expected.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > [!WARNING]
+        > **Never attach original logs** (`GuideLog_*`, `DebugLog_*`, `Logs_App_*`, `*.glog`)
+        > and never paste unredacted lines. They contain your Wi-Fi names and passwords,
+        > network and MAC addresses, your location and serial numbers.
+        > **Issues are public** and cannot be fully deleted once others have seen them.
+        >
+        > If a log excerpt is needed, run DecoVita with redaction switched on (the default)
+        > and copy only the few lines that matter from its output (`*_decoded.txt`,
+        > `*_phd2.txt`, `*_redacted.glog`). Check them line by line before posting.
+        > Log file names contain the date and time of your session: replace them with
+        > something like `DebugLog_<date>.txt`.
+  - type: input
+    id: version
+    attributes:
+      label: DecoVita version
+      description: Shown in the window title and in `python decovita.py --help`.
+      placeholder: "1.4.0"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system and Python version
+      placeholder: "Windows 11, Python 3.13"
+    validations:
+      required: true
+  - type: dropdown
+    id: interface
+    attributes:
+      label: How did you run DecoVita?
+      options:
+        - Window (GUI)
+        - Text menu
+        - Command line
+    validations:
+      required: true
+  - type: dropdown
+    id: logtype
+    attributes:
+      label: Log type
+      multiple: true
+      options:
+        - GuideLog
+        - DebugLog
+        - Phone app log (Logs_App_*)
+        - libtoupcam .glog
+        - Not sure
+  - type: textarea
+    id: steps
+    attributes:
+      label: Command or steps
+      description: The command line you used, or the steps in the window / text menu.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: The error message, warning or summary table. Replace real file names.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I did not attach original logs, and every log line I posted comes from DecoVita's redacted output and was checked line by line.
+          required: true
