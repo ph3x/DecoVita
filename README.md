@@ -12,6 +12,8 @@ StellaVita. Not affiliated with ToupTek.
 - Redact personal data (on by default, each category can be switched off):
   hotspot/Wi-Fi, network addresses (IP and MAC), location, serial numbers
 - Check every redacted output for leftover personal data (leak check)
+- Warn when a log no longer decodes reliably (e.g. after a firmware or app update
+  changed the format), and check itself on built-in sample lines before every run
 - Additionally convert GuideLogs to PHD2 format (for phdlogview)
 - Redact `libtoupcam*.glog` files (plain text)
 
@@ -56,6 +58,7 @@ Useful switches:
   on a large DebugLog)
 - `--no-full-date` – keep the original DebugLog time format (without date)
 - `--force` – overwrite existing outputs
+- `--selftest` – only run the selftest (see below) and show the result
 
 ## Outputs
 
@@ -139,11 +142,32 @@ position, and the text is UTF-8-encoded twice. The tool undoes both.
 The scheme was derived from the log files alone. There is no documentation of it
 from ToupTek.
 
+### Decode confidence and selftest
+
+A firmware or app update could change the encoding. The tool would then produce
+garbage, and the redaction cannot find personal data in garbage. Two checks guard
+against this:
+
+- **Decode confidence:** the share of non-empty lines of a file that decoded
+  with certainty (a timestamp confirmed the start value, or one start value was
+  clearly the most plausible). It is shown per file (`decode confidence 100.0%`)
+  and in the summary table, column `Conf` (`-` = not decoded, e.g. `.glog` or
+  an already decoded file). All real logs so far reach 100.0%. Below 95% the
+  value is marked with `!` and a warning says that the format has probably
+  changed and the redaction may be incomplete. Files with fewer than 20 lines
+  get no warning (too few to judge).
+- **Unknown format:** a file named like a StellaVita log (`GuideLog_*.txt`,
+  `DebugLog_*.txt`, `Logs_App_*.txt`, `*.glog`) whose content cannot be
+  decoded at all is skipped with a warning; the table shows `format changed?`.
+- **Selftest:** before every run the tool decodes, redacts and leak-checks a few
+  built-in, invented sample lines in the real log formats. If that fails, it
+  processes nothing and names the failed checks. `--selftest` runs it on its own.
+
 ## Known limits
 
 - Space and `~` cannot be distinguished (see above).
 - Lines consisting only of digits can be ambiguous. The statistics count such lines
-  as "uncertain".
+  as "uncertain", which lowers the decode confidence slightly.
 - phdlogview interpolates its time axis from the frame numbers. When the frame rate
   changes, the time labels are misleading; hovering shows the true time.
 
