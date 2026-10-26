@@ -210,7 +210,8 @@ cipher, but:
   server); lat/lon in JSON, `Update longitude and latitude: a,b`,
   `Data1 longitude-time1 n-----lon latitude lat-=---<dawn h>----<dusk h>`,
   `…TimeZoneHourOffset [y, m, d, h, m, s]   tz---lat---lon`; GPS `alt=`/`mslAlt=` in
-  `bestLocation Location[…]` (Android already masks lat/lon there).
+  `bestLocation Location[…]` (Android already masks lat/lon there). The generic
+  IPv4/MAC rules now run for every log type (#25).
 - **Twilight block** (verified 2026-10-25): `Data1 <deg> deg rise|down|sunrise|sunset
   time D h m s.ssss` for -18/-12/-6/-0.833 deg, the two decimal hours in the
   `longitude-time1` line (-18 deg dawn/dusk) and `TwilightData{…mHours/mMinutes/
@@ -267,11 +268,17 @@ for all of them.
 
 - The **3rd octet** is replaced by a per-subnet token: `192.168.<N1>.105`. The 4th
   octet stays, so devices remain distinguishable while the network does not.
-- Masking applies only in the `ipv4:` prefix, in JSON keys `*ip` / `*gateway`, and in
-  `ip:` inside info strings.
-- Subnet masks stay unchanged.
-- Version strings that look like IPs (`"poaefw_sdk_version":"x.x.x.x"`) must never be
-  touched. This is covered by tests.
+- Context rules mask any IPv4 (public too) in the `ipv4:` prefix, in JSON keys
+  `*ip` / `*gateway`, and in `ip:` inside info strings.
+- Generic rules for every log type (`Redactor._do_any_net`, #18 app, #25 all): every
+  private IPv4 (10/8, 172.16/12, 192.168/16, 169.254/16, 100.64/10) anywhere in a line,
+  and MACs -> `<MAC_n>` (Android placeholders `02:00:00:00:00:00` kept). A cheap
+  substring pre-check in `feed` keeps the cost low (231 MB DebugLog: redaction
+  +~3 s, full run ~25 s; real logs byte-identical to before, 2026-10-26).
+- Subnet masks and public IPs (outside the context rules) stay unchanged.
+- Version strings that look like IPs (`"poaefw_sdk_version":"x.x.x.x"`, `EFW-x.x.x.x`,
+  `v10.x.x.x`) must never be touched: `_RE_VER_CTX` skips an IP right after
+  `version|ver|fw|sdk`. This is covered by tests.
 
 ### location
 

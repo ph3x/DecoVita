@@ -1332,9 +1332,6 @@ def t_app(fx, tmp):
     t3 = "\n".join(body(r3["outputs"][0]))
     check("app: --no-redact-network keeps MAC and IPs, rest redacted",
           A["mac"] in t3 and A["ip_phone"] in t3 and F["ssid_short"] not in t3 and A["alt"] not in t3)
-    red = sv.Redactor(sv.CATEGORIES)
-    line = "[20:15:00.100] [Net] peer " + A["mac"]
-    check("device logs: MAC rule only active for app logs", red.feed(line) == line)
 
     st = []
     res = sv.process_all([fx["app"]], log=quiet, status=st.append, report=True)
@@ -1343,6 +1340,78 @@ def t_app(fx, tmp):
           sv.results_table(res, "en")[2])
     check("app: dry run counts match the real run", res[0]["redactions"] == r["redactions"],
           "%s vs %s" % (res[0]["redactions"], r["redactions"]))
+
+
+def t_any_net(fx, tmp):
+    """#25: the generic private-IPv4 and MAC rules run for every log type."""
+    print("\n[20] Private IPv4 and MAC rules for device logs (#25)")
+    srv = '[20:15:00.%d00] [CoreServer][RES][ipv4:192.168.77.23:44034] {"id":%d,"code":0,%s}'
+    deb = [
+        srv % (1, 1, '"bridge_addr":"10.0.42.1","bridge_mac":"DE:AD:BE:EF:00:03"'),
+        srv % (2, 2, '"server":"203.0.113.7","subnet_mask":"255.255.255.0","dns":"172.20.5.9"'),
+        srv % (3, 3, '"poaefw_sdk_version":"10.1.2.3","tp_sdk_version":"60.1","peer":"192.168.88.5"'),
+        "[20:15:00.400] [Net] peer de:ad:be:ef:00:01 via 169.254.10.20, cgnat 100.64.1.2",
+        "[20:15:00.500] [Net] fw EFW-192.168.0.1 ver v172.16.0.4 placeholder 02:00:00:00:00:00",
+        "[20:15:00.600] [Net] public 100.200.1.2 and 172.32.0.1, time 12:34:56.789",
+    ]
+    gl = list(fx["guide_lines"])
+    i = next(n for n, ln in enumerate(gl) if ln.startswith("INFO: "))
+    gl.insert(i, "INFO: Camera connected via 10.0.42.7, MAC de:ad:be:ef:00:04")
+    d = os.path.join(tmp, "anynet_in")
+    pdeb = os.path.join(d, "DebugLog_2026-01-15_201500.txt")
+    pgui = os.path.join(d, "GuideLog_2026-01-15_201500.txt")
+    write(pdeb, encrypt_lines(deb, 31))
+    write(pgui, encrypt_lines(gl, 32))
+
+    def run(sub, enabled=sv.CATEGORIES):
+        res = sv.process_all([pdeb, pgui], log=quiet, status=quiet, enabled=enabled,
+                             out_dir=os.path.join(tmp, sub), full_date=False)
+        return res, ["\n".join(body(r["outputs"][0])) for r in res], \
+            "\n".join(body(res[1]["outputs"][1]))
+    res, (td, tg), tp = run("o_anynet")
+    check("debug: private IP under a non-IP JSON key masked (10.0.<N2>.1)",
+          '"bridge_addr":"10.0.<N2>.1"' in td, td)
+    check("debug: MAC in JSON -> <MAC_1> (upper case input)", '"bridge_mac":"<MAC_1>"' in td, td)
+    check("debug: 172.16/12 masked, public IP and subnet mask kept",
+          '"dns":"172.20.<N3>.9"' in td and '"server":"203.0.113.7"' in td
+          and '"subnet_mask":"255.255.255.0"' in td, td)
+    check("debug: private IP after a version field masked (192.168.<N4>.5)",
+          '"peer":"192.168.<N4>.5"' in td, td)
+    check("debug: free text: MAC, 169.254/16 and 100.64/10 masked",
+          "peer <MAC_2> via 169.254.<N5>.20, cgnat 100.64.<N6>.2" in td, td)
+    check("debug: private-looking version strings kept",
+          '"poaefw_sdk_version":"10.1.2.3"' in td and "fw EFW-192.168.0.1 ver v172.16.0.4" in td, td)
+    check("debug: Android placeholder MAC, public 100.200/172.32 and times kept",
+          "placeholder 02:00:00:00:00:00" in td
+          and "public 100.200.1.2 and 172.32.0.1, time 12:34:56.789" in td, td)
+    check("guide: private IP and MAC masked in an INFO line",
+          "INFO: Camera connected via 10.0.<N2>.7, MAC <MAC_3>" in tg, tg)
+    check("guide: PHD2 output masked as well",
+          "10.0.42." not in tp and "de:ad:be:ef" not in tp.lower(), tp[:200])
+    for v in ("10.0.42.", "172.20.5.", "192.168.88.", "169.254.10.", "100.64.1.",
+              "de:ad:be:ef", "DE:AD:BE:EF"):
+        check("'%s' gone from debug and guide outputs" % v, v not in td and v not in tg)
+    check("network counter includes the generic rules (debug 3 ipv4: prefixes + 7, guide 2)",
+          res[0]["redactions"]["network"] == 10 and res[1]["redactions"]["network"] == 2,
+          "%s / %s" % (res[0]["redactions"], res[1]["redactions"]))
+
+    _, (nd, ng), _ = run("o_anynet_off", tuple(c for c in sv.CATEGORIES if c != "network"))
+    check("counter-check: --no-redact-network keeps IPs and MACs in device logs",
+          "DE:AD:BE:EF:00:03" in nd and "10.0.42.1" in nd and "de:ad:be:ef:00:04" in ng
+          and "10.0.42.7" in ng)
+
+    red = sv.Redactor(sv.CATEGORIES)
+    pre = ["[20:15:00.100] [Net] a %s b" % ip for ip in
+           ("10.1.2.3", "172.31.2.3", "192.168.2.3", "169.254.2.3", "100.127.2.3")]
+    check("pre-check lets every private range through",
+          all("<N" in red.feed(ln) for ln in pre))
+    check("pre-check: line without hints unchanged",
+          red.feed("[20:15:00.100] [Net] 12:34:56 1.2.3.4 ab:cd") == "[20:15:00.100] [Net] 12:34:56 1.2.3.4 ab:cd")
+    for ln in ('[20:15:00.100] {"tp_sdk_version":"60.1","ip":"10.9.8.7"}',
+               "[20:15:00.100] [Net] version check ok, host 10.9.8.7",
+               '[20:15:00.100] {"server":"10.9.8.7","driver":"10.9.8.7"}'):
+        check("version guard needs the version right before the IP: %s" % ln[15:],
+              "10.9.8.7" not in red.feed(ln), red.feed(ln))
 
 
 def t_placeholders(fx, tmp):
@@ -1491,6 +1560,7 @@ def main():
         t_menu(fx, tmp)
         t_app(fx, tmp)
         t_placeholders(fx, tmp)
+        t_any_net(fx, tmp)
         t_gui(fx, tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

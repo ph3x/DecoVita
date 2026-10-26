@@ -74,9 +74,10 @@ what was redacted.
 - **Hotspot/Wi-Fi:** network names become `<SSID_1>`, `<SSID_2>`, …;
   passwords become `<REDACTED>`.
 - **Network:** the third part of IP addresses is replaced (`192.168.<N1>.23`).
-  Devices stay distinguishable, the network does not. In app logs this applies to
-  every private IP address (public addresses such as ToupTek's update server stay),
-  and MAC/BSSID addresses become `<MAC_1>`, `<MAC_2>`, ….
+  Devices stay distinguishable, the network does not. This applies to every
+  private IP address wherever it appears in a log (public addresses such as
+  ToupTek's update server, subnet masks and version numbers stay), and MAC/BSSID
+  addresses become `<MAC_1>`, `<MAC_2>`, ….
 - **Same value, same placeholder:** within one run, a value gets the same placeholder
   in every output file (e.g. `<SSID_1>` is the same network in the DebugLog and in
   the app log). Numbering follows the order of first appearance. The mapping is
