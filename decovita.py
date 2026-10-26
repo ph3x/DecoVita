@@ -431,40 +431,59 @@ def _valid_ip(*octs):
     return all(0 <= int(o) <= 255 for o in octs)
 
 
+class Placeholders:
+    """Value -> placeholder mapping shared by every file of one run (#21).
+    Numbering follows the order of first appearance.  The mapping lives in
+    memory only: it is never written, logged or printed."""
+    # every placeholder the redactor emits; a leak check (#20) can use it too
+    PATTERN = re.compile(r'<SSID_\d+>|<REDACTED>|<N\d+>|<MAC_\d+>')
+
+    def __init__(self):
+        self.ssid = {}              # value -> token
+        self.net = {}               # (o1,o2,o3) -> token
+        self.mac = {}               # MAC (lower case) -> token
+
+    @staticmethod
+    def _get(table, key, fmt):
+        tok = table.get(key)
+        if tok is None:
+            tok = table[key] = fmt % (len(table) + 1)
+        return tok
+
+    def ssid_token(self, val):
+        return self._get(self.ssid, val, "<SSID_%d>")
+
+    def net_token(self, o1, o2, o3):
+        return self._get(self.net, (o1, o2, o3), "N%d")
+
+    def mac_token(self, val):
+        return self._get(self.mac, val.lower(), "<MAC_%d>")
+
+    def __repr__(self):             # never show the values, e.g. in a traceback
+        return "<Placeholders ssid=%d net=%d mac=%d>" % (
+            len(self.ssid), len(self.net), len(self.mac))
+
+
 class Redactor:
-    """Streaming, stateful redactor.  feed(line)->line, counters in .counts."""
-    def __init__(self, enabled, app=False):
+    """Streaming, stateful redactor.  feed(line)->line, counters in .counts.
+    ph: Placeholders shared across the files of one run (default: a new one)."""
+    def __init__(self, enabled, app=False, ph=None):
         self.en = {c: (c in enabled) for c in CATEGORIES}
         self.counts = {c: 0 for c in CATEGORIES}
         self.app = app              # phone app log: extra free-text rules
-        self.ssid_map = {}          # value -> token
-        self.net_map = {}           # (o1,o2,o3) -> token
-        self.mac_map = {}           # MAC (lower case) -> token
+        self.ph = ph if ph is not None else Placeholders()
+        self.ssid_map = self.ph.ssid    # alias, shared with the other files of the run
         self._cfg_sensitive = False
 
     # -- helpers ---------------------------------------------------------
     def _ssid_token(self, val):
-        tok = self.ssid_map.get(val)
-        if tok is None:
-            tok = "<SSID_%d>" % (len(self.ssid_map) + 1)
-            self.ssid_map[val] = tok
-        return tok
+        return self.ph.ssid_token(val)
 
     def _net_token(self, o1, o2, o3):
-        key = (o1, o2, o3)
-        tok = self.net_map.get(key)
-        if tok is None:
-            tok = "N%d" % (len(self.net_map) + 1)
-            self.net_map[key] = tok
-        return tok
+        return self.ph.net_token(o1, o2, o3)
 
     def _mac_token(self, val):
-        key = val.lower()
-        tok = self.mac_map.get(key)
-        if tok is None:
-            tok = "<MAC_%d>" % (len(self.mac_map) + 1)
-            self.mac_map[key] = tok
-        return tok
+        return self.ph.mac_token(val)
 
     # -- category passes -------------------------------------------------
     def _do_hotspot(self, line):
@@ -646,7 +665,7 @@ class Redactor:
                 line = self._stray_ssids(line)
         return line
 
-    _TOKEN_SPLIT = re.compile(r'(<SSID_\d+>|<REDACTED>|<N\d+>|<MAC_\d+>)')
+    _TOKEN_SPLIT = re.compile('(%s)' % Placeholders.PATTERN.pattern)
 
     def _stray_ssids(self, line):
         """Replace known SSIDs that appear outside SSID fields (longest first,
@@ -858,9 +877,10 @@ def _iter_raw(path, plain):
 
 def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
                  full_date=True, report=False, force=False, lang="en",
-                 progress=None, log=print, sniffed=None):
+                 progress=None, log=print, sniffed=None, placeholders=None):
     """Decode (and optionally redact/convert) one file.  Returns a result dict.
-    sniffed: result of sniff(path) if the caller already has it."""
+    sniffed: result of sniff(path) if the caller already has it.
+    placeholders: Placeholders shared with other files of the same run."""
     res = {"path": path, "kind": None, "outputs": [], "skipped": None, "report": report,
            "redactions": {c: 0 for c in CATEGORIES}, "warnings": [],
            "lines": 0, "uncertain": 0,
@@ -878,7 +898,7 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
     outdir = out_dir or os.path.dirname(os.path.abspath(path))
     if not report:
         os.makedirs(outdir, exist_ok=True)
-    red = Redactor(enabled, app=(kind == "app"))
+    red = Redactor(enabled, app=(kind == "app"), ph=placeholders)
 
     # --- GuideLog: buffer (small), decode, redact, convert ---------------
     if kind == "guide":
@@ -1023,8 +1043,11 @@ def process_all(files, lang="en", log=print, status=None, progress_for=None, **k
     """Process several files.  Before each file a status line like
     "[2/5] DebugLog 1/2: name" goes to status(text) (default: log).
     progress_for(path) may return a progress callback for that file.
-    Remaining keyword arguments go to process_file.  Returns the result dicts."""
+    Remaining keyword arguments go to process_file.  Returns the result dicts.
+    All files share one Placeholders, so a value gets the same placeholder in
+    every output of the run (#21)."""
     import collections
+    ph = Placeholders()
     status = status or log
     sniffed = [(f, sniff(f)) for f in files]
     total = collections.Counter(sn[0] for _, sn in sniffed)
@@ -1037,7 +1060,7 @@ def process_all(files, lang="en", log=print, status=None, progress_for=None, **k
         _POS_CACHE.clear()
         results.append(process_file(f, lang=lang, log=log, sniffed=sn,
                                     progress=progress_for(f) if progress_for else None,
-                                    **kw))
+                                    placeholders=ph, **kw))
     return results
 
 

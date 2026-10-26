@@ -77,6 +77,11 @@ Schwärzung.
   Geräte bleiben unterscheidbar, das Netz nicht. In App-Logs gilt das für jede
   private IP-Adresse (öffentliche Adressen wie der Update-Server von ToupTek
   bleiben), und MAC-/BSSID-Adressen werden zu `<MAC_1>`, `<MAC_2>`, ….
+- **Gleicher Wert, gleicher Platzhalter:** Innerhalb eines Laufs bekommt ein Wert
+  in allen Ausgabedateien denselben Platzhalter (z. B. ist `<SSID_1>` im DebugLog
+  und im App-Log dasselbe Netz). Nummeriert wird in der Reihenfolge des ersten
+  Auftretens. Die Zuordnung liegt nur im Speicher und wird nie gespeichert oder
+  angezeigt.
 - **Standort (DebugLog):** Breite und Länge werden auf 0,1° gerundet. Höhe und
   Azimut der Montierung, Sternzeit, Höhe über dem Meer und UTC-Zeit werden entfernt,
   weil sich daraus der Standort sehr genau zurückrechnen ließe.

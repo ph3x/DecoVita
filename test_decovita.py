@@ -1345,6 +1345,93 @@ def t_app(fx, tmp):
           "%s vs %s" % (res[0]["redactions"], r["redactions"]))
 
 
+def t_placeholders(fx, tmp):
+    """#21: one run = one value->placeholder mapping across all its files."""
+    print("\n[19] Stable placeholders across files of one run (#21)")
+    F, A = FAKE, APP_FAKE
+    cafe, mac2 = "FAKE_CAFE_NET", "de:ad:be:ef:00:02"
+    wifi = ('[20:15:00.%d00] [CoreServer][RES][ipv4:%s:44034] {"id":%d,"code":0,'
+            '"CMD_GLOBAL_GET_WIFI":{"ssid":"%s","password":"%s"}}')
+    deb_a = [wifi % (2, F["ip_dev"], 1, F["ssid_long"], F["password"])]
+    deb_b = [wifi % (2, F["ip_other"], 1, cafe, F["password"]),
+             wifi % (3, F["ip_dev"], 2, F["ssid_long"], F["password"]),
+             "[20:15:00.800] [WiFi] connected to %s ok" % F["ssid_long"]]
+    trace = ("2026-01-15 20:15:%02d | RecordWifiTrace wifi connected ssid=%s, bssid=%s, "
+             "previousBssid=%s, frequency=5180")
+    app_a = [trace % (1, F["ssid_short"], A["mac"], A["mac"])]
+    app_b = [trace % (1, cafe, mac2, mac2), trace % (2, F["ssid_short"], A["mac"], mac2)]
+    d = os.path.join(tmp, "ph_in")
+    paths = {}
+    for n, (name, data) in enumerate((
+            ("deb_a", ("DebugLog_2026-01-15_201500.txt", encrypt_lines(deb_a, 21))),
+            ("deb_b", ("DebugLog_2026-01-16_201500.txt", encrypt_lines(deb_b, 22))),
+            ("app_a", ("Logs_App_20260115201500.txt", encrypt_app_lines(app_a, 23))),
+            ("app_b", ("Logs_App_20260116201500.txt", encrypt_app_lines(app_b, 24))))):
+        paths[name] = os.path.join(d, data[0])
+        write(paths[name], data[1])
+
+    def run_all(order, sub, **kw):
+        out = os.path.join(tmp, sub)
+        msgs = []
+        res = sv.process_all([paths[k] for k in order], log=msgs.append, status=msgs.append,
+                             out_dir=out, full_date=False, **kw)
+        txt = {k: "\n".join(body(r["outputs"][0])) for k, r in zip(order, res)} if not kw else {}
+        return res, txt, msgs, out
+
+    order = ["deb_a", "deb_b", "app_a", "app_b"]
+    res, txt, msgs, out = run_all(order, "o_ph1")
+    check("debug A: first SSID/subnet -> <SSID_1>, <N1>",
+          "ipv4:192.168.<N1>.23:44034" in txt["deb_a"] and '"ssid":"<SSID_1>"' in txt["deb_a"], txt["deb_a"])
+    check("debug B: new SSID/subnet continue the run's numbering (<SSID_2>, <N2>)",
+          '"ssid":"<SSID_2>"' in txt["deb_b"] and "ipv4:192.168.<N2>.5:" in txt["deb_b"], txt["deb_b"])
+    check("debug B: value from file A keeps its placeholder (<SSID_1>, <N1>)",
+          '"ssid":"<SSID_1>"' in txt["deb_b"] and "ipv4:192.168.<N1>.23:" in txt["deb_b"],
+          txt["deb_b"])
+    check("debug B: free-text SSID learned in file A replaced as well",
+          "connected to <SSID_1> ok" in txt["deb_b"] and F["ssid_long"] not in txt["deb_b"],
+          txt["deb_b"])
+    check("app A/B: same MAC -> same <MAC_1> in both files, new MAC -> <MAC_2>",
+          "bssid=<MAC_1>, previousBssid=<MAC_1>" in txt["app_a"]
+          and "bssid=<MAC_2>, previousBssid=<MAC_2>" in txt["app_b"]
+          and "bssid=<MAC_1>, previousBssid=<MAC_2>" in txt["app_b"],
+          txt["app_a"] + " | " + txt["app_b"])
+    check("app: SSIDs share the numbering with the debug logs (<SSID_3> new, <SSID_2> known)",
+          "ssid=<SSID_3>, bssid=<MAC_1>" in txt["app_a"]
+          and "ssid=<SSID_2>, bssid=<MAC_2>" in txt["app_b"], txt["app_a"] + " | " + txt["app_b"])
+    allt = "\n".join(txt.values())
+    check("distinct values never share a placeholder",
+          len({re.search(r'"ssid":"(<SSID_\d+>)"', x).group(1)
+               for x in (txt["deb_a"], txt["deb_b"].split("\n")[0])}) == 2
+          and "<MAC_1>" in allt and "<MAC_2>" in allt)
+
+    res2, txt2, _, _ = run_all(order, "o_ph2")
+    check("numbering is deterministic (second run identical)", txt2 == txt)
+    rev = ["deb_b", "deb_a", "app_a", "app_b"]
+    _, txt3, _, _ = run_all(rev, "o_ph3")
+    check("numbering follows first appearance (reversed order: B's values first)",
+          '"ssid":"<SSID_1>"' in txt3["deb_b"].split("\n")[0]
+          and "ipv4:192.168.<N1>.5:" in txt3["deb_b"] and '"ssid":"<SSID_2>"' in txt3["deb_a"],
+          txt3["deb_b"])
+
+    secret = [F["ssid_long"], F["ssid_short"], cafe, A["mac"], mac2, F["ip_dev"], F["ip_other"]]
+    check("mapping never logged or printed", not any(v in m for m in msgs for v in secret),
+          "%d messages" % len(msgs))
+    check("mapping never written to disk (only the outputs in the folder)",
+          sorted(os.listdir(out)) == sorted(os.path.basename(r["outputs"][0]) for r in res),
+          str(os.listdir(out)))
+    ph = sv.Placeholders()
+    ph.ssid_token(F["ssid_long"]), ph.mac_token(A["mac"])
+    check("Placeholders repr shows counts only, no values",
+          not any(v in repr(ph) for v in secret), repr(ph))
+    rep, _, _, _ = run_all(order, "o_ph_dry", report=True)
+    check("dry run counts match the real run across files",
+          [r["redactions"] for r in rep] == [r["redactions"] for r in res])
+    check("leak-check helper: Placeholders.PATTERN matches every emitted placeholder",
+          not re.sub(sv.Placeholders.PATTERN, "", allt).count("<SSID_")
+          and not re.sub(sv.Placeholders.PATTERN, "", allt).count("<MAC_")
+          and not re.sub(sv.Placeholders.PATTERN, "", allt).count("<N"))
+
+
 # ---------------------------------------------------------------------------
 
 def build_fixtures(tmp):
@@ -1403,6 +1490,7 @@ def main():
         t_progress_i18n(fx, tmp)
         t_menu(fx, tmp)
         t_app(fx, tmp)
+        t_placeholders(fx, tmp)
         t_gui(fx, tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

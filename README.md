@@ -77,6 +77,10 @@ what was redacted.
   Devices stay distinguishable, the network does not. In app logs this applies to
   every private IP address (public addresses such as ToupTek's update server stay),
   and MAC/BSSID addresses become `<MAC_1>`, `<MAC_2>`, ….
+- **Same value, same placeholder:** within one run, a value gets the same placeholder
+  in every output file (e.g. `<SSID_1>` is the same network in the DebugLog and in
+  the app log). Numbering follows the order of first appearance. The mapping is
+  kept in memory only and never saved or shown.
 - **Location (DebugLog):** latitude and longitude are rounded to 0.1°. Mount
   altitude/azimuth, sidereal time, elevation and UTC time are removed, because the
   site could be reconstructed from them very precisely.
