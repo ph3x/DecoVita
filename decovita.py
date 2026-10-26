@@ -393,6 +393,11 @@ _RE_APP_SSID = (
 _SSID_NONE = frozenset(("null", "<unknown ssid>"))   # placeholders, not SSIDs
 _RE_ANY_IP = re.compile(r'(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?!\.?\d)')
 _RE_MAC = re.compile(r'(?<![0-9A-Fa-f:])[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}(?![0-9A-Fa-f:])')
+# a version number right before a private-looking IP ("..._version":"10.1.2.3",
+# EFW-10.1.2.3, v10.1.2.3) is not an address (#25); "ver" not inside "server"
+_RE_VER_CTX = re.compile(r'(?:version|(?<![a-z])ver|fw|(?<![a-z])sdk)\w*["\'\s:=-]*v?$', re.I)
+# the middle of any MAC; a time "12:34:56" is not one.  Literal ":" first = fast
+_MAC_HINT = re.compile(r':[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:[0-9A-Fa-f]{2}:')
 _MAC_KEEP = frozenset(("02:00:00:00:00:00", "00:00:00:00:00:00"))   # Android placeholders
 _RE_APP_LATLON = (
     re.compile(r'(longitude and latitude: )(-?\d+(?:\.\d+)?)(,)(-?\d+(?:\.\d+)?)'),
@@ -591,6 +596,28 @@ class Redactor:
             line = _RE_SERIAL_JSON_NUM.sub(sjn, line)
         return line
 
+    def _do_any_net(self, line):
+        """MAC addresses and private IPv4 addresses anywhere in a line, for
+        every log type (#18 app logs, #25 all).  Public addresses, subnet masks
+        and version strings stay."""
+        if _MAC_HINT.search(line):
+            def mac(m):
+                if m.group(0) in _MAC_KEEP:
+                    return m.group(0)
+                self.counts["network"] += 1
+                return self._mac_token(m.group(0))
+            line = _RE_MAC.sub(mac, line)
+
+        def ip(m):
+            o = [int(x) for x in m.groups()]
+            if (max(o) > 255 or not _private_ip(o[0], o[1])
+                    or _RE_VER_CTX.search(line, max(0, m.start() - 40), m.start())):
+                return m.group(0)
+            self.counts["network"] += 1
+            tok = self._net_token(*m.groups()[:3])
+            return "%s.%s.<%s>.%s" % (m.group(1), m.group(2), tok, m.group(4))
+        return _RE_ANY_IP.sub(ip, line)
+
     def _do_app(self, line):
         """Phone app log rules (issue #18).  Runs before the generic passes, so
         SSIDs learned here are also replaced as stray occurrences."""
@@ -603,23 +630,6 @@ class Redactor:
                 return m.group(1) + self._ssid_token(m.group(2)) + m.group(3)
             for rx in _RE_APP_SSID:
                 line = rx.sub(ssid, line)
-        if self.en["network"]:
-            if ":" in line:
-                def mac(m):
-                    if m.group(0) in _MAC_KEEP:
-                        return m.group(0)
-                    self.counts["network"] += 1
-                    return self._mac_token(m.group(0))
-                line = _RE_MAC.sub(mac, line)
-            if "." in line:
-                def ip(m):
-                    o = [int(x) for x in m.groups()]
-                    if max(o) > 255 or not _private_ip(o[0], o[1]):
-                        return m.group(0)
-                    self.counts["network"] += 1
-                    tok = self._net_token(*m.groups()[:3])
-                    return "%s.%s.<%s>.%s" % (m.group(1), m.group(2), tok, m.group(4))
-                line = _RE_ANY_IP.sub(ip, line)
         if self.en["location"]:
             if "latitude" in line or "TimeZoneHourOffset" in line:
                 def ll(m):
@@ -647,6 +657,13 @@ class Redactor:
     def feed(self, line):
         if self.app:
             line = self._do_app(line)
+        # cheap pre-check (#25): substring tests first, so the regexes of
+        # _do_any_net run on few lines of a large DebugLog
+        if self.en["network"] and (
+                "192.168." in line or "10." in line or "172." in line
+                or "169.254." in line or "100." in line
+                or (line.count(":") >= 5 and _MAC_HINT.search(line))):
+            line = self._do_any_net(line)
         low = line.lower()
         # serial first (stateful on Config/Current lines)
         if self.en["serial"] and (self._cfg_sensitive or line.startswith("Config:")
