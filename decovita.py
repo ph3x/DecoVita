@@ -38,6 +38,7 @@ import sys
 import time
 import math
 import argparse
+import bisect
 
 # ----------------------------------------------------------------------------
 #  Version / known-good markers
@@ -708,6 +709,178 @@ def _round1(s):
 
 
 # ----------------------------------------------------------------------------
+#  Leak check (#20): independent second pass over the written outputs
+# ----------------------------------------------------------------------------
+# Own patterns on purpose: a line format the redaction regexes miss must not be
+# missed here for the same reason.  Every placeholder (Placeholders.PATTERN,
+# incl. the 3rd-octet token in "192.168.<N1>.23") is blanked before matching.
+# Findings are line numbers only; the values are never kept or shown.
+
+_LK_BLANK = "\x01"
+_LK_IP = re.compile(r'(?<![\d.])(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(?!\.?\d)')
+_LK_IP_CTX = re.compile(r'(?:ipv[46]:|\bip\s*[:=]\s*|ip"\s*:\s*"|gateway"\s*:\s*")$', re.I)
+_LK_VER_CTX = re.compile(r'(?:ver(?:sion)?|fw|sdk)\w*["\'\s:=-]{0,4}$|(?<![A-Za-z])v$', re.I)
+_LK_MAC = re.compile(r'(?<![0-9A-Fa-f:-])[0-9A-Fa-f]{2}([:-])[0-9A-Fa-f]{2}'
+                     r'(?:\1[0-9A-Fa-f]{2}){4}(?![0-9A-Fa-f:-])')
+_LK_MAC_OK = frozenset(("00:00:00:00:00:00", "02:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"))
+_LK_LATLON = re.compile(r'(?<![A-Za-z])(?:lat|lon|long|latitude|longitude)(?![A-Za-z])'
+                        r'[^A-Za-z\n]{0,15}?\d{1,3}\.\d{2}', re.I)
+# twilight times, GPS altitude and "...HourOffset [date] tz---lat---lon" (app
+# log) give the site too; other "a---b" pairs are RA/Dec
+_LK_LOC_MISC = re.compile(r'deg (?:rise|down|sunrise|sunset) time -?\d|\bm(?:Hours|Minutes|Seconds)=\d'
+                          r'|-=----?\d|(?<![A-Za-z])(?:alt|mslAlt)=-?\d'
+                          r'|TimeZoneHourOffset \[[^\]]*\]\s+[-\d.]+---\s*-?\d+\.\d\d')
+_LK_INDI = re.compile(r'--> (Number|Text)#?\d*:\s*name = (\w+),.*?(?:value|text) = ([^\s,]*)')
+_LK_INDI_LOC = re.compile(r'(?:^|_)(?:LAT|LONG|ALT|AZ|LST|ELEV|JD|SYNCTIME|UTC|OFFSET)$')
+_LK_SSID = re.compile(r'(?<![A-Za-z])(?:[a-z_]*(?<!b)ssid|(?:last)?wifi ?name|curwifi|curboxwifi|wi-fi name'
+                      r'|wi-fi bridge)"?\s*(?::|=+|\s)\s*"?(?!mIsBoxConnected)'
+                      r'((?:(?!-(?:true|false)-|--)[^\s",}])*)', re.I)
+_LK_PW = re.compile(r'(?<![A-Za-z])[a-z_]*(?:password|passwd|psk|pwd)(?![A-Za-z])'
+                    r'"?\s*[:=]\s*"?([^\s",}]*)', re.I)
+_LK_SERIAL = re.compile(r'(?<![A-Za-z])[a-z_]*serial[a-z_]*"\s*:\s*"?([^\s",}]*)', re.I)
+_LK_CFG = re.compile(r'^Config:\s*\S*(?:serialnumber|ownername|artist|copyright)/?\s*$', re.I)
+_LK_CFG_VAL = re.compile(r'^\s*(?:Current|Default|Choices)\s*:\s*(.*)$')
+_LK_HEX = re.compile(r'(?<![\w.])(?=[0-9A-Fa-f]*\d)(?=[0-9A-Fa-f]*[A-Fa-f])'
+                     r'[0-9A-Fa-f]{12,}(?![\w.])')
+_LK_HASH_CTX = re.compile(r'(?:md5|sha\d*|hash|checksum|crc\d*)\w*["\'\s:=]*$', re.I)
+# cheap pre-checks over a whole block of lines (literal first character =
+# fast scan); the full patterns run only on the few lines that pass, so a
+# 231 MB DebugLog costs seconds.  (pattern, on lower case?)
+_LK_HINTS = tuple((re.compile(p), lc) for p, lc in (
+    (r'\.\d{1,3}\.\d{1,3}\.\d', False),                      # IPv4
+    (r':[0-9a-f]{2}:[0-9a-f]{2}:', True), (r'-[0-9a-f]{2}-[0-9a-f]{2}-', True),  # MAC
+    (r'l(?:at|on)', True),                                      # location
+    (r' time -?\d', False), (r'm(?:Hours|Minutes|Seconds)=', False), (r'alt=', True),
+    (r'TimeZoneHourOffset', False), (r'-=---', False),
+    (r'name = \w*(?:LAT|LONG|ALT|AZ|LST|ELEV|JD|SYNCTIME|UTC|OFFSET),[^\n]*?'
+     r'(?:value|text) = (?!<REDACTED>)', False),
+    (r's(?:sid|erial)', True), (r'wi-?fi', True), (r'p(?:ass|sk|wd)', True),
+    (r'Config:', False),
+    (r'dh', None), (r'hd', None),       # digit next to a hex letter, see _LK_HEX_MAP
+))
+_LK_BLOCK = 1 << 22                     # bytes of whole lines scanned at once
+_LK_HEX_MAP = str.maketrans("0123456789abcdef", "dddddddddd" "hhhhhh")   # on lower case
+
+
+def _lk_private(o):
+    return (o[0] == 10 or (o[0] == 172 and 16 <= o[1] <= 31) or o[:2] == [192, 168]
+            or o[:2] == [169, 254] or (o[0] == 100 and 64 <= o[1] <= 127))
+
+
+def _lk_value_ok(v):
+    """An empty value, a placeholder or a known non-value is not a leak."""
+    return (not v or v.startswith(_LK_BLANK) or v.lower() in ("null", "nan", "<unknown")
+            or v.startswith("--"))
+
+
+def _leak_cats(line, state):
+    """Categories with a possible leftover in one output line (independent of
+    Redactor).  state: dict carried from line to line (gphoto config block)."""
+    found = set()
+    if "<" in line:
+        line = Placeholders.PATTERN.sub(_LK_BLANK, line)
+    low = line.lower()
+    # network: private IPv4 anywhere, any IPv4 in an address field; MACs
+    if "." in line:
+        for m in _LK_IP.finditer(line):
+            o = [int(x) for x in m.groups()]
+            if max(o) > 255:
+                continue
+            pre = line[max(0, m.start() - 30):m.start()]
+            if _LK_VER_CTX.search(pre):
+                continue
+            if _lk_private(o) or _LK_IP_CTX.search(pre):
+                found.add("network")
+                break
+    if ":" in line or "-" in line:
+        for m in _LK_MAC.finditer(line):
+            if m.group(0).lower().replace("-", ":") not in _LK_MAC_OK:
+                found.add("network")
+                break
+    # location: lat/lon with 2+ decimals (1 decimal is the redacted precision),
+    # INDI site/time values that are not <REDACTED>
+    if (("lat" in low or "lon" in low) and _LK_LATLON.search(line)) or _LK_LOC_MISC.search(line):
+        found.add("location")
+    if "--> " in line:
+        m = _LK_INDI.search(line)
+        if m and _LK_INDI_LOC.search(m.group(2)) and not _lk_value_ok(m.group(3)):
+            name, val = m.group(2), m.group(3)
+            if not (name.endswith(("LAT", "LONG")) and re.match(r'-?\d+(\.\d)?$', val)):
+                found.add("location")
+    # hotspot: SSID and password values that are not placeholders
+    if "ssid" in low or "wifi" in low or "wi-fi" in low:
+        if any(not _lk_value_ok(m.group(1)) for m in _LK_SSID.finditer(line)):
+            found.add("hotspot")
+    if "pass" in low or "psk" in low or "pwd" in low:
+        if any(not _lk_value_ok(m.group(1)) for m in _LK_PW.finditer(line)):
+            found.add("hotspot")
+    # serial: JSON serial fields, sensitive gphoto config blocks, long hex strings
+    if "serial" in low:
+        if any(not _lk_value_ok(m.group(1)) for m in _LK_SERIAL.finditer(line)):
+            found.add("serial")
+    if line.startswith("Config:"):
+        state["cfg"] = bool(_LK_CFG.match(line))
+    elif state.get("cfg"):
+        if line.startswith("["):              # timestamped line ends the block
+            state["cfg"] = False
+        else:
+            m = _LK_CFG_VAL.match(line)
+            if m and not _lk_value_ok(m.group(1).strip()):
+                found.add("serial")
+    for m in _LK_HEX.finditer(line):
+        if not _LK_HASH_CTX.search(line, max(0, m.start() - 20), m.start()):
+            found.add("serial")
+            break
+    return found
+
+
+def check_leaks(path, enabled=CATEGORIES):
+    """Scan a written output file.  Returns {category: [line numbers]} for the
+    enabled categories with possible leftovers (empty dict = clean)."""
+    hits = {}
+    state = {}
+    base = 0                    # line number before the current block
+    cfg_open = False            # a sensitive gphoto config block runs on
+    with open(path, encoding="utf-8", errors="replace") as f:
+        while True:
+            lines = f.readlines(_LK_BLOCK)
+            if not lines:
+                break
+            block = "".join(lines)
+            low = block.lower()
+            texts = {False: block, True: low, None: low.translate(_LK_HEX_MAP)}
+            starts = [0]
+            for ln in lines:
+                starts.append(starts[-1] + len(ln))
+            cand = set()
+            for rx, lc in _LK_HINTS:
+                for m in rx.finditer(texts[lc]):
+                    cand.add(bisect.bisect_right(starts, m.start()) - 1)
+            # lines of a sensitive config block (up to the next timestamped or
+            # Config: line, which resets the state) are checked as well
+            heads = [k for k in sorted(cand) if lines[k].startswith("Config:")
+                     and _LK_CFG.match(lines[k])]
+            if cfg_open:                    # continued from the previous block
+                heads.insert(0, -1)
+            cfg_open = False
+            for k in heads:
+                i = k + 1
+                while i < len(lines) and not lines[i].startswith(("[", "Config:")):
+                    cand.add(i)
+                    i += 1
+                if i < len(lines):
+                    cand.add(i)
+                else:
+                    cfg_open = True
+            for k in sorted(cand):
+                for c in _leak_cats(lines[k].rstrip("\n"), state):
+                    if c in enabled:
+                        hits.setdefault(c, []).append(base + k + 1)
+            base += len(lines)
+    return hits
+
+
+# ----------------------------------------------------------------------------
 #  GuideLog -> PHD2 converter  (validated against phdlogview)
 # ----------------------------------------------------------------------------
 
@@ -894,13 +1067,16 @@ def _iter_raw(path, plain):
 
 def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
                  full_date=True, report=False, force=False, lang="en",
-                 progress=None, log=print, sniffed=None, placeholders=None):
+                 progress=None, log=print, sniffed=None, placeholders=None,
+                 leak_check=True):
     """Decode (and optionally redact/convert) one file.  Returns a result dict.
     sniffed: result of sniff(path) if the caller already has it.
-    placeholders: Placeholders shared with other files of the same run."""
+    placeholders: Placeholders shared with other files of the same run.
+    leak_check: scan the written outputs for leftovers of the redacted
+    categories (#20); res["leaks"] = {output name: {category: [lines]}}."""
     res = {"path": path, "kind": None, "outputs": [], "skipped": None, "report": report,
            "redactions": {c: 0 for c in CATEGORIES}, "warnings": [],
-           "lines": 0, "uncertain": 0,
+           "lines": 0, "uncertain": 0, "leaks": None,
            "guide": {"sessions": 0, "steps": 0, "drops": 0}}
 
     kind, plain = sniffed or sniff(path)
@@ -952,6 +1128,7 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
                     o.write("\n".join(phd) + "\n")
                 res["outputs"].append(phd_out)
         res["redactions"] = dict(red.counts)
+        _leak_pass(res, enabled, leak_check)
         _log_done(res, lang, log)
         return res
 
@@ -974,6 +1151,7 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
                 o.write("\n".join(lines) + "\n")
             res["outputs"].append(out)
         res["redactions"] = dict(red.counts)
+        _leak_pass(res, enabled, leak_check)
         _log_done(res, lang, log)
         return res
 
@@ -1026,8 +1204,21 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
     if report:
         _log_report(res, lang, log)
     else:
+        _leak_pass(res, enabled, leak_check)
         _log_done(res, lang, log)
     return res
+
+
+def _leak_pass(res, enabled, on):
+    """Leak check (#20) over the outputs written for this file.  Only the
+    redacted categories are checked: the others are known to be in clear."""
+    if not (on and enabled and res["outputs"]):
+        return
+    res["leaks"] = {}
+    for out in res["outputs"]:
+        hits = check_leaks(out, enabled)
+        if hits:
+            res["leaks"][os.path.basename(out)] = hits
 
 
 def _check_guide_version(decoded, res, lang):
@@ -1092,13 +1283,17 @@ def _result_state(r):
 def results_table(results, lang):
     """Summary table, one row per file.  Plain text, monospace aligned."""
     head = [_t(lang, "col_" + c) for c in ("no", "type", "file", "lines", "uncertain")]
-    head += [_t(lang, "col_" + c) for c in CATEGORIES] + [_t(lang, "col_state")]
+    head += [_t(lang, "col_" + c) for c in CATEGORIES]
+    head += [_t(lang, "col_leaks"), _t(lang, "col_state")]
     rows = []
     for i, r in enumerate(results, 1):
         state = _result_state(r)
         nums = [r["lines"], r["uncertain"]] + [r["redactions"][c] for c in CATEGORIES]
         # nothing was (fully) processed -> no numbers rather than misleading ones
         nums = ["-"] * len(nums) if state in ("skipped", "unknown") else [str(x) for x in nums]
+        # flagged lines of the leak check; "-" = not checked (dry run, nothing redacted)
+        lk = r.get("leaks")
+        nums.append("-" if lk is None else str(sum(len(v) for h in lk.values() for v in h.values())))
         rows.append([str(i), KIND_NAMES[r["kind"] or "unknown"], os.path.basename(r["path"])]
                     + nums + [_t(lang, "state_" + state)])
     width = [max(len(x[c]) for x in [head] + rows) for c in range(len(head))]
@@ -1178,6 +1373,10 @@ _STR = {
     "col_network": {"de": "Netz", "en": "Net"},
     "col_location": {"de": "Ort", "en": "Loc"},
     "col_serial": {"de": "SerNr", "en": "Serial"},
+    "col_leaks": {"de": "Reste", "en": "Leaks"},
+    "leak_head": {"de": "  ! Nachprüfung: vermutlich persönliche Daten übrig in %s – vor dem Weitergeben prüfen:",
+                  "en": "  ! Leak check: possible personal data left in %s - check before sharing:"},
+    "leak_lines": {"de": "Zeilen", "en": "lines"},
     "state_ok": {"de": "fertig", "en": "done"},
     "state_dry": {"de": "Probelauf", "en": "dry run"},
     "state_skipped": {"de": "existiert", "en": "exists"},
@@ -1232,6 +1431,19 @@ def _log_done(res, lang, log):
                                 g["sessions"], g["steps"], g["drops"]))
     for w in res["warnings"]:
         log("  ! " + w)
+    for name, hits in sorted((res.get("leaks") or {}).items()):
+        log(_t(lang, "leak_head") % name)
+        for c in CATEGORIES:
+            if c in hits:
+                log("      %s %d (%s %s)" % (_t(lang, "cat_" + c), len(hits[c]),
+                                            _t(lang, "leak_lines"), _line_list(hits[c])))
+
+
+def _line_list(nums, limit=10):
+    """'3, 17, 40' - at most limit numbers, then '... +N'.  Line numbers only,
+    never values."""
+    txt = ", ".join(str(n) for n in nums[:limit])
+    return txt + (", ... +%d" % (len(nums) - limit) if len(nums) > limit else "")
 
 
 def _log_report(res, lang, log):
@@ -1273,6 +1485,8 @@ def build_parser():
                    help="dry run: show what would be redacted, write nothing")
     p.add_argument("--no-redact", dest="redact", action="store_false",
                    help="turn off all redaction")
+    p.add_argument("--no-leak-check", dest="leak_check", action="store_false",
+                   help="skip the check of the outputs for leftover personal data")
     for c in CATEGORIES:
         p.add_argument("--no-redact-" + c, dest="red_" + c, action="store_false",
                        help="do not redact %s" % c)
@@ -1296,7 +1510,8 @@ def run_cli(a):
     t0 = time.time()
     res = process_all(files, lang=a.lang, progress_for=lambda f: _big_progress(f, a.lang),
                       out_dir=a.out, enabled=enabled, make_phd2=a.phd2,
-                      full_date=a.full_date, report=a.report, force=a.force)
+                      full_date=a.full_date, report=a.report, force=a.force,
+                      leak_check=a.leak_check)
     print()
     print("\n".join(results_table(res, a.lang)))
     print(_summary(len(res), time.time() - t0, a.lang))

@@ -11,6 +11,7 @@ StellaVita. Not affiliated with ToupTek.
   (phone app)
 - Redact personal data (on by default, each category can be switched off):
   hotspot/Wi-Fi, network addresses (IP and MAC), location, serial numbers
+- Check every redacted output for leftover personal data (leak check)
 - Additionally convert GuideLogs to PHD2 format (for phdlogview)
 - Redact `libtoupcam*.glog` files (plain text)
 
@@ -51,6 +52,8 @@ Useful switches:
 - `--no-redact-hotspot`, `--no-redact-network`, `--no-redact-location`,
   `--no-redact-serial` – keep one category; `--no-redact` keeps everything
 - `--no-phd2` – no PHD2 file for GuideLogs
+- `--no-leak-check` – skip the leak check (saves about a fifth of the run time
+  on a large DebugLog)
 - `--no-full-date` – keep the original DebugLog time format (without date)
 - `--force` – overwrite existing outputs
 
@@ -95,6 +98,29 @@ what was redacted.
 
 Redaction is an aid, not a guarantee. Check the outputs yourself before you share
 them.
+
+### Leak check
+
+After writing, the tool reads every redacted output once more and looks for
+leftovers with its own, independent patterns: private IP addresses (and any IP in
+an address field), MAC addresses, coordinates with more than one decimal, site and
+time values of the mount, twilight times, Wi-Fi names and passwords, serial
+numbers and long hex strings. Placeholders such as `<SSID_1>`, `<MAC_1>`,
+`<REDACTED>` or `192.168.<N1>.23` count as clean. This catches values that slip
+through because a log line has a format the redaction does not know.
+
+For each affected output it prints a warning with the category, the number of lines
+and their line numbers, never the values:
+
+```
+  ! Leak check: possible personal data left in DebugLog_2026-01-15_201500_decoded.txt - check before sharing:
+      Hotspot/Wi-Fi 2 (lines 5, 6)
+```
+
+The summary table shows the number of flagged lines per file in the column
+`Leaks` (`-` = not checked). Only redacted categories are checked; a dry run
+(`--report`) and `--no-redact` check nothing. The check is on by default;
+`--no-leak-check` turns it off.
 
 ## How the logs are encoded
 

@@ -95,6 +95,14 @@ into a FAIL, and `DV_TEST_SHOTS=<dir>` stores GUI screenshots (Linux: ImageMagic
   `_do_hotspot`, `_do_network`, `_do_location`, `_do_serial`, plus `_stray_ssids`;
   placeholder numbering comes from a `Placeholders` shared per run (#21);
   `Redactor(enabled, app=True)` adds `_do_app` (app-log formats, MAC -> `<MAC_n>`).
+- **Leak check (#20):** `check_leaks(path, enabled)` -> `{category: [line numbers]}`,
+  an independent second pass over each written output (`_leak_cats` per line, own
+  `_LK_*` patterns, never the redaction regexes). Placeholders are blanked via
+  `Placeholders.PATTERN` first. Speed: the file is scanned in blocks
+  (`_LK_BLOCK`) with literal-first pre-checks (`_LK_HINTS`); only matching lines get
+  the full patterns (231 MB DebugLog: ~6 s). `process_file(..., leak_check=True)`
+  stores `res["leaks"]` (`None` = not checked); `_log_done` prints category, count
+  and line numbers, never values; table column `Leaks`/`Reste`.
 - **PHD2 conversion:** `convert_to_phd2(lines, stats)`.
 - **Orchestration:** `process_file(...)` (one file), `process_all(files, ...)` (several
   files: sniffs each once, emits a status line `[i/n] <Type> j/m: <name>` per file,
@@ -335,6 +343,14 @@ phdlogview ignores these lines. When the tool reads its own output again, it ski
 - **DebugLog full date:** on by default (`--no-full-date`). The date comes from the
   filename. A new day is counted only on a backward jump of more than 12 h. Without a
   date in the filename the tool warns and leaves the date off.
+- **Leak check (#20):** on by default, `--no-leak-check` (CLI only) turns it off. Only
+  enabled categories are checked; dry run and `--no-redact` check nothing. Verified
+  2026-10-26 on the real logs: 0 warnings on all redacted outputs, and on unredacted
+  outputs it flags exactly the lines the redactor changes (counts only).
+  Not flagged on purpose: public IPs outside address fields (OTA server), IPs after
+  `version|ver|fw|sdk|v`, 1-decimal LAT/LONG, RA/Dec pairs (`a---b`, `a----b`),
+  `delta_alt/az`, `nan`, Android placeholder MACs, hashes after `md5|sha|hash|crc`,
+  GuideLog header `Alt = … deg`.
 - **`--report`:** dry run. It writes nothing (not even the output folder) and the
   counts match a real run.
 - **Version check:** a GuideLog `Version:` / `Version protocol:` outside
@@ -392,7 +408,7 @@ phdlogview ignores these lines. When the tool reads its own output again, it ski
   so a window that waits for input fails the check instead of hanging the suite. The
   test "tkinter without display" is skipped on Windows/macOS: removing `DISPLAY` hides
   nothing there.
-- **Last run:** 263/263 passed on Python 3.12.3 with Xvfb (2026-10-26); CI results: see the Actions tab.
+- **Last run:** 376/376 passed on Python 3.14 with Xvfb (2026-10-26); CI results: see the Actions tab.
 - **Fixtures:** built in a temp dir from fake plaintext and encrypted with `encode_line`.
   All values are invented (e.g. `FAKE_HOME`/`FAKE_HOME_EXT`, `FAKESERIAL…`,
   `192.168.77.x`).

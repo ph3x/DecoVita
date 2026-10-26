@@ -11,6 +11,7 @@ des ToupTek StellaVita. Keine Verbindung zu ToupTek.
   (Handy-App) entschlüsseln
 - Persönliche Daten schwärzen (standardmäßig an, einzeln abschaltbar):
   Hotspot/WLAN, Netzwerkadressen (IP und MAC), Standort, Seriennummern
+- Jede geschwärzte Ausgabe auf übrig gebliebene persönliche Daten prüfen (Nachprüfung)
 - GuideLogs zusätzlich ins PHD2-Format umwandeln (für phdlogview)
 - `libtoupcam*.glog` (Klartext) schwärzen
 
@@ -51,6 +52,8 @@ Nützliche Schalter:
 - `--no-redact-hotspot`, `--no-redact-network`, `--no-redact-location`,
   `--no-redact-serial` – eine Kategorie nicht schwärzen; `--no-redact` schwärzt nichts
 - `--no-phd2` – keine PHD2-Datei für GuideLogs
+- `--no-leak-check` – Nachprüfung auslassen (spart bei einem großen DebugLog etwa
+  ein Fünftel der Laufzeit)
 - `--no-full-date` – DebugLog-Zeitstempel im Originalformat (ohne Datum)
 - `--force` – vorhandene Ausgaben überschreiben
 
@@ -97,6 +100,30 @@ Schwärzung.
 
 Das Schwärzen ist eine Hilfe, keine Garantie. Prüfe die Ausgaben selbst, bevor du
 sie weitergibst.
+
+### Nachprüfung
+
+Nach dem Schreiben liest das Tool jede geschwärzte Ausgabe noch einmal und sucht
+mit eigenen, unabhängigen Mustern nach Resten: private IP-Adressen (und jede IP in
+einem Adressfeld), MAC-Adressen, Koordinaten mit mehr als einer Nachkommastelle,
+Standort- und Zeitwerte der Montierung, Dämmerungszeiten, WLAN-Namen und
+-Passwörter, Seriennummern und lange Hex-Zeichenketten. Platzhalter wie
+`<SSID_1>`, `<MAC_1>`, `<REDACTED>` oder `192.168.<N1>.23` gelten als sauber. So
+fallen Werte auf, die durchrutschen, weil eine Logzeile ein Format hat, das das
+Schwärzen nicht kennt.
+
+Für jede betroffene Ausgabe erscheint eine Warnung mit Kategorie, Anzahl der Zeilen
+und Zeilennummern, nie mit den Werten:
+
+```
+  ! Nachprüfung: vermutlich persönliche Daten übrig in DebugLog_2026-01-15_201500_decoded.txt – vor dem Weitergeben prüfen:
+      Hotspot/WLAN 2 (Zeilen 5, 6)
+```
+
+Die Übersichtstabelle zeigt die Zahl der markierten Zeilen pro Datei in der Spalte
+`Reste` (`-` = nicht geprüft). Geprüft werden nur geschwärzte Kategorien; ein
+Probelauf (`--report`) und `--no-redact` prüfen nichts. Die Nachprüfung ist
+standardmäßig an; `--no-leak-check` schaltet sie ab.
 
 ## Wie die Logs kodiert sind
 
