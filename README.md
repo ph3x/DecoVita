@@ -191,12 +191,14 @@ tested automatically on Linux and Windows (GitHub Actions).
 Bug reports, ideas and pull requests are welcome, via
 [GitHub Issues](https://github.com/ph3x/DecoVita/issues) and pull requests.
 
-- **Bug reports:** please include the DecoVita version (window title or
-  `--help`), operating system, Python version, the command or steps you used, and
-  the message or the summary table.
+- **Bug reports:** please use the bug report form. It asks for the DecoVita
+  version (window title or `--help`), operating system, Python version, the
+  command or steps you used, and the message or the summary table.
 - **Never attach original logs.** They contain your Wi-Fi names, network addresses,
   location and serial numbers. If a log excerpt is needed, use the tool's redacted
-  output and check it line by line before posting. Issues are public.
+  output and check it line by line before posting. Log file names contain the date
+  and time of your session, so replace them (also in the summary table). Issues
+  are public.
 - **Pull requests:** run `python test_decovita.py` (all tests must pass), add a
   test for every fix or feature, standard library only, code and comments in
   English, user-facing texts in English and German.

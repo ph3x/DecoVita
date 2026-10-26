@@ -1902,6 +1902,36 @@ def build_fixtures(tmp):
     return fx
 
 
+def t_issue_template():
+    """#10: the bug report form warns against original logs before going public."""
+    print("\n[24] Bug report template (#10)")
+    path = os.path.join(HERE, ".github", "ISSUE_TEMPLATE", "bug_report.yml")
+    if not os.path.exists(path):
+        check("bug report template exists", False, path)
+        return
+    txt = open(path, encoding="utf-8").read()
+    check("template has SPDX lines",
+          "SPDX-FileCopyrightText" in txt and "SPDX-License-Identifier: GPL-3.0-or-later" in txt)
+    check("template is labelled bug", 'labels: ["bug"]' in txt)
+    check("template warns against original logs", "Never attach original logs" in txt)
+    check("template says issues are public", "Issues are public" in txt)
+    prefixes = [p for p in ("GuideLog_", "DebugLog_", "Logs_App_") if p in sv._LOG_NAME.pattern]
+    check("template names every log type DecoVita reads",
+          len(prefixes) == 3 and all(p in txt for p in prefixes) and ".glog" in txt, str(prefixes))
+    check("template points to the redacted output",
+          all(s in txt for s in ("_decoded", "_phd2", "_redacted")) and "_plain" not in txt)
+    check("template asks to replace log file names (date/time)", "file names" in txt.lower())
+    m = re.search(r"type: checkboxes.*?required: true", txt, re.S)
+    check("template has a required privacy checkbox",
+          bool(m) and "did not attach original logs" in m.group(0))
+    check("template asks for the version", "id: version" in txt)
+    check("issue template config exists",
+          os.path.exists(os.path.join(HERE, ".github", "ISSUE_TEMPLATE", "config.yml")))
+    for rd, word in (("README.md", "bug report form"), ("README.de.md", "Formular für Fehlermeldungen")):
+        check("%s points to the bug report form" % rd,
+              word in open(os.path.join(HERE, rd), encoding="utf-8").read())
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="svtest_")
     try:
@@ -1930,6 +1960,7 @@ def main():
         t_leak_check(fx, tmp)
         t_confidence(fx, tmp)
         t_selftest(fx, tmp)
+        t_issue_template()
         t_gui(fx, tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
