@@ -1503,6 +1503,205 @@ def t_placeholders(fx, tmp):
 
 # ---------------------------------------------------------------------------
 
+# Leak check (#20).  Every line mirrors a real log line format; all values are
+# invented.  (category, line) - each line holds exactly one unredacted value.
+LEAK_LINES = [
+    ("network", '[20:15:00.200] [CoreServer][RES][ipv4:192.168.77.23:44034] {"id":1,"code":0}'),
+    ("network", '[20:15:00.200] [CoreServer][RES][ipv4:203.0.113.9:44034] {"id":1,"code":0}'),
+    ("network", '[20:15:00.300] [CoreServer][RES][ipv4:<N1>] {"id":3,"code":0,"ip":"203.0.113.9"}'),
+    ("network", "2026-01-15 20:15:01 | BoxConnectionService loadBridgeHost192.168.77.23"),
+    ("network", '[20:15:00.300] [CoreServer][RES] {"id":2,"code":0,"bridge_mac":"DE:AD:BE:EF:00:03"}'),
+    ("network", "[20:15:00.400] [Net] peer de-ad-be-ef-00-01 via <MAC_1>"),
+    ("network", '2026-01-15 20:15:02 | logCallback: [CoreClient][RES] {"filename":"192.168.77.105AstroStation_1.2.34.aspkg"}'),
+    ("location", '[20:15:00.600] [CoreServer][RES] {"id":5,"code":0,"CMD_GLOBAL_GET_LOCATION":{"latitude":12.3456,"longitude":-23.4}}'),
+    ("location", "[20:15:01.002] --> Number#0: name = LAT, label = Lat (dd:mm:ss), value = 12.345678, min = -90.000000, max = 90.000000, step = 0.000000"),
+    ("location", "[20:15:01.006] --> Number#0: name = ALT, label = Altitude, value = 42.1, min = -90.000000, max = 90.000000, step = 0.000000"),
+    ("location", "[20:15:01.017] --> Number#0: name = SYNCPOLARALIGN_AZ, label = Mount AZ, value = 123.654321, min = 0.000000, max = 360.000000, step = 0.000000"),
+    ("location", "[20:15:01.014] --> Text#0: name = UTC, label = UTC Time, text = 2026-01-15T19:15:01"),
+    ("location", "2026-01-15 20:15:03 | Data1 -18 deg rise time 16 5 12 33.123456789012345"),
+    ("location", "2026-01-15 20:15:03 | BrokenLineView drawTwilightBackground low-frequency details 0---TwilightData{mYears=2026, mMonths=1, mDays=16, mHours=5, mMinutes=<REDACTED>, mSeconds=<REDACTED>}"),
+    ("location", "2026-01-15 20:15:04 | Data1 longitude-time1 0-----23.5 latitude 12.3-=---5.21----<REDACTED>"),
+    ("location", "2026-01-15 20:15:05 | BrokenLineView drawTwilightBackgroundutcTimeZoneHourOffset [2026, 1, 15, 20, 15, 30]   1.0---12.3456789---23.5"),
+    ("location", "2026-01-15 20:15:05 | bestLocation Location[gps 12******,23****** hAcc=12.345 et=+1d2h3m4s567ms alt=345.67890123 vAcc=1.5 mslAlt=<REDACTED>]"),
+    ("location", "2026-01-15 20:15:06 | Update longitude and latitude: 23.4567891,12.3"),
+    ("hotspot", '[20:15:00.200] [CoreServer][RES] {"id":1,"code":0,"CMD_GLOBAL_GET_WIFI":{"ssid":"FAKE_HOME","password":"<REDACTED>"}}'),
+    ("hotspot", '[20:15:00.300] [CoreServer][RES] {"id":2,"code":0,"CMD_GLOBAL_GET_NETWORK":{"wifi_ssid":"<SSID_1>","wifi_password":"FAKE-PASS-ONE"}}'),
+    ("hotspot", "2026-01-15 20:15:07 | RecordWifiTrace wifi connected ssid=FAKE_CAFE_NET, bssid=<MAC_1>, previousBssid=<MAC_1>, frequency=2412"),
+    ("hotspot", "2026-01-15 20:15:07 | lastWifiName:--curWifi:<SSID_1>--curBoxWifi:FAKE_HOME_EXT"),
+    ("hotspot", "2026-01-15 20:15:08 | StellaVitaFragment Wi-Fi bridge=====FAKE_HOME-true--true-----false"),
+    ("hotspot", "2026-01-15 20:15:08 | Update Wi-Fi name: FAKE_HOME mIsBoxConnected:true"),
+    ("serial", '[20:15:00.900] [CoreServer][RES] {"id":9,"code":0,"camera_serial":"FAKESN123456"}'),
+    ("serial", '[20:15:00.900] [CoreServer][RES] {"id":9,"code":0,"dev_serial_number":"0a1b2c3d4e5f60718293"}'),
+]
+# lines that must stay quiet: placeholders, accepted precision, public IPs,
+# version strings, RA/Dec, Android placeholders, hashes, GuideLog header
+LEAK_CLEAN = [
+    '[20:15:00.200] [CoreServer][RES][ipv4:192.168.<N1>.23:44034] {"id":1,"CMD_GLOBAL_GET_WIFI":{"ssid":"<SSID_1>","password":"<REDACTED>"}}',
+    '[20:15:00.300] [CoreServer][RES] {"connected_bridge_wifi_ip":"192.168.<N2>.5","connected_bridge_wifi_subnet_mask":"255.255.255.0","connected_bridge_wifi_gateway":"192.168.<N2>.1"}',
+    '[20:15:00.500] [CoreServer][RES] {"id":4,"code":0,"poaefw_sdk_version":"10.1.2.3","tp_sdk_version":"60.32549.20260908","info":"ip:192.168.<N1>.23"}',
+    "[20:15:00.500] [Net] fw EFW-192.168.0.1 ver v172.16.0.4 placeholder 02:00:00:00:00:00, time 12:34:56.789",
+    "2026-01-15 20:15:09 | OTA server final address: http://203.0.113.10:8080/firmware/  local path: /data/user/0/com.touptek.astrostation/files",
+    "2026-01-15 20:15:09 | poaeFw version:1.2.3.0",
+    '[20:15:00.600] [CoreServer][RES] {"id":5,"CMD_GLOBAL_GET_LOCATION":{"latitude":12.3,"longitude":-23.5}}',
+    "[20:15:01.002] --> Number#0: name = LAT, label = Lat (dd:mm:ss), value = 12.3, min = -90.000000, max = 90.000000, step = 0.000000",
+    "[20:15:01.003] --> Number#1: name = LONG, label = Lon (dd:mm:ss), value = 336.5, min = 0.000000, max = 360.000000, step = 0.000000",
+    "[20:15:01.006] --> Number#0: name = ALT, label = Altitude, value = <REDACTED>, min = -90.000000, max = 90.000000, step = 0.000000",
+    "[20:15:01.017] --> Number#0: name = SYNCPOLARALIGN_ALT, label = Est. Mount Alt., value = nan, min = -90.000000, max = 90.000000, step = 0.000000",
+    "[20:15:01.011] --> Number#0: name = RA, label = RA (hh:mm:ss), value = 1.330000, min = 0.000000, max = 24.000000, step = 0.000000",
+    "[20:15:01.015] --> Text#1: name = OFFSET, label = UTC Offset, text = <REDACTED>",
+    '[20:15:02.100] [CoreServer][EVT] {"event_type":"EVT_POLARALIGN_COMPLETE":{"is_success":true,"delta_alt":0.123456789012345,"delta_az":-0.98765432101234}}',
+    '[20:15:02.200] [CoreServer][EVT] {"event_type":"EVT_GUIDE_STEP":{"frame_number":1,"time":1234.567,"offset_x":0.12345678901234567,"offset_y":-1.2345678901234e-05}}',
+    "2026-01-15 20:15:10 | SkyMapActivity updateScreenCenterRaDec: 12.345678901234567----45.67890123456789",
+    "2026-01-15 20:15:10 | MountDeviceManager updateMountInfo1: ---1.2345678901234567---58.3000000001",
+    "2026-01-15 20:15:10 | DirectorCalibration setLineDegree1.2345678---123.45678",
+    "2026-01-15 20:15:11 | Data1 -18 deg rise time <REDACTED>",
+    "2026-01-15 20:15:11 | Data1 UT time 2026 1 15 19 15 30 offset 1.0",
+    "2026-01-15 20:15:11 | BrokenLineView drawTwilightBackgroundutcTimeZoneHourOffset [2026, 1, 15, 20, 15, 30]   1.0---12.3---23.5",
+    "2026-01-15 20:15:12 | bestLocation Location[gps 12******,23****** hAcc=12.345 et=+1d2h3m4s567ms alt=<REDACTED> vAcc=1.5 mslAlt=<REDACTED>]",
+    "2026-01-15 20:15:12 | RecordWifiTrace networkCallback TransportInfo: <SSID: <unknown ssid>, BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00, IP: /192.168.<N3>.105",
+    "2026-01-15 20:15:12 | lastWifiName:--curWifi:--curBoxWifi:<SSID_2>",
+    "2026-01-15 20:15:13 | StellaVitaFragment Wi-Fi bridge=====-false--false-----false",
+    "2026-01-15 20:15:13 | StellaVitaFragment Wi-Fi bridge=====null-false--false-----false",
+    "2026-01-15 20:15:13 | Update Wi-Fi name:  mIsBoxConnected:false",
+    '2026-01-15 20:15:14 | logCallback: [CoreClient][RES] {"filename":"192.168.<N1>.105AstroStation_1.2.34.aspkg","md5":"0123456789abcdef0123456789abcdef"}',
+    "[20:15:01.020] --> Switch#0: name = CONNECTION_SERIAL, label = Serial, state = on",
+    '[20:15:00.900] [CoreServer][RES] {"id":9,"code":0,"camera_serial":"<REDACTED>"}',
+    "[20:15:00.950] [Focuser] list \"FocuserProd\",\"Gemini EAF\",\"DeepSkyDad AF3\",\"DeepSkyDad AF2\"",
+    "RA = 1.33 hr, Dec = 58.3 deg, LST = 19.87 hr, Pier side = West, Alt = 42.92 deg, Az = 45.17 deg",
+    '2026-01-15 20:15:15 | 相机温度替换后：-5.0℃',
+]
+
+
+def t_leak_check(fx, tmp):
+    """#20: independent second pass over the written outputs."""
+    print("\n[21] Leak check of the outputs (#20)")
+    d = os.path.join(tmp, "leak")
+    os.makedirs(d)
+    lines = [ln for _, ln in LEAK_LINES]
+    p = os.path.join(d, "leaks.txt")
+    write(p, "# header line\n" + "\n".join(lines) + "\n")
+    hits = sv.check_leaks(p)
+    for no, (cat, ln) in enumerate(LEAK_LINES, 2):
+        got = [c for c, v in hits.items() if no in v]
+        check("leak found (%s): %s" % (cat, ln[:70]), got == [cat], "%s / %s" % (got, ln))
+    q = os.path.join(d, "clean.txt")
+    write(q, "\n".join(LEAK_CLEAN) + "\n")
+    hits = sv.check_leaks(q)
+    for no, ln in enumerate(LEAK_CLEAN, 1):
+        got = [c for c, v in hits.items() if no in v]
+        check("no false alarm: %s" % ln[:70], not got, "%s / %s" % (got, ln))
+    check("check_leaks: only the requested categories",
+          set(sv.check_leaks(p, ("serial",))) == {"serial"}, str(sv.check_leaks(p, ("serial",))))
+
+    # every placeholder kind the redactor emits counts as clean (#21 pattern)
+    ph = sv.Placeholders()
+    toks = [ph.ssid_token("FAKE_HOME"), ph.mac_token("de:ad:be:ef:00:01"), sv.REDACTED,
+            "192.168.<%s>.23" % ph.net_token("192", "168", "77")]
+    check("all placeholder kinds are matched by Placeholders.PATTERN",
+          all(sv.Placeholders.PATTERN.fullmatch(t) or "<N1>" in t for t in toks), str(toks))
+    r = os.path.join(d, "tokens.txt")
+    write(r, '[20:15:00.200] [CoreServer][RES][ipv4:%s:44034] {"ssid":"%s","password":"%s","mac":"%s"}\n'
+          % (toks[3], toks[0], toks[2], toks[1]))
+    check("placeholders are not reported", sv.check_leaks(r) == {}, str(sv.check_leaks(r)))
+
+    # block boundaries: line numbers and a gphoto config block across blocks
+    # (a value without digits: no other pre-check picks up its line)
+    cfg = (["[20:15:02.000] [gphoto] dumping config", "Config: /main/settings/artist",
+            "  Label      : Artist", "  Readonly   : 0", "  Type       : TEXT",
+            "  Current    : %s" % FAKE["artist"], "Config: /main/imgsettings/iso",
+            "  Current    : 1600", "[20:15:02.100] [gphoto] done"])
+    filler = ["[20:15:01.%03d] [CoreServer] tick" % i for i in range(300)]
+    b = os.path.join(d, "blocks.txt")
+    write(b, "\n".join(filler + cfg + filler + lines[:1]) + "\n")
+    want = {"serial": [300 + 6], "network": [600 + len(cfg) + 1]}
+    old = sv._LK_BLOCK
+    try:
+        res_small = {}
+        for size in (64, 200, 1 << 22):
+            sv._LK_BLOCK = size
+            res_small[size] = sv.check_leaks(b)
+    finally:
+        sv._LK_BLOCK = old
+    check("line numbers right for any block size (config block split across blocks)",
+          all(v == want for v in res_small.values()), "%s / %s" % (res_small, want))
+    c2 = os.path.join(d, "cfg_ok.txt")
+    write(c2, "\n".join(cfg[:5] + ["  Current    : <REDACTED>"] + cfg[6:]) + "\n")
+    check("redacted config block is clean, ISO 'Current' outside it is not checked",
+          sv.check_leaks(c2) == {}, str(sv.check_leaks(c2)))
+
+    # all fixtures, real formats, redaction on: no warning at all
+    files = [fx["guide"], fx["debug"], fx["glog"], fx["app"]]
+    log = []
+    res = sv.process_all(files, log=log.append, status=quiet, out_dir=os.path.join(tmp, "o_leak"))
+    check("fixtures redacted: every output checked and clean",
+          all(rr["leaks"] == {} for rr in res), str([rr["leaks"] for rr in res]))
+    check("clean outputs: no leak warning in the log", not any("Leak check" in x for x in log), "\n".join(log))
+    tab = sv.results_table(res, "en")
+    check("table: 'Leaks' column with 0 for clean files",
+          "Leaks" in tab[0] and all(row.split()[-2] == "0" for row in tab[2:]), "\n".join(tab))
+
+    # simulated format mismatch: the SSID rule misses -> leak check catches it
+    old = sv._RE_SSID
+    sv._RE_SSID = re.compile(r'(?!x)x()()()')
+    try:
+        log = []
+        res = sv.process_all([fx["debug"]], log=log.append, status=quiet,
+                             out_dir=os.path.join(tmp, "o_leak_miss"), full_date=False)
+    finally:
+        sv._RE_SSID = old
+    out = res[0]["outputs"][0]
+    text = body(out)
+    with open(out, encoding="utf-8") as f:
+        all_lines = f.read().split("\n")
+    expect = [n for n, ln in enumerate(all_lines, 1) if '"ssid":"' + FAKE["ssid_long"] in ln
+              or '"connected_bridge_wifi_ssid":"' + FAKE["ssid_short"] in ln
+              or '"wifi_ssid":"' + FAKE["ssid_long"] in ln]
+    check("counter-check: the missed SSID really is in the output",
+          any(FAKE["ssid_long"] in ln for ln in text) and expect, str(expect))
+    got = res[0]["leaks"].get(os.path.basename(out), {})
+    check("missed SSID -> hotspot leak with its line numbers", got.get("hotspot") == expect,
+          "%s / %s" % (got, expect))
+    joined = "\n".join(log)
+    check("warning names file, category, count and lines",
+          ("Leak check: possible personal data left in " + os.path.basename(out)) in joined
+          and ("Hotspot/Wi-Fi %d (lines %s)" % (len(expect), ", ".join(map(str, expect)))) in joined, joined)
+    check("warning never shows a value",
+          not any(v in joined for v in (FAKE["ssid_long"], FAKE["ssid_short"], FAKE["password"])), joined)
+    tab = sv.results_table(res, "de")
+    check("table DE: 'Reste' column counts the flagged lines",
+          "Reste" in tab[0] and tab[2].split()[-2] == str(len(expect)), "\n".join(tab))
+
+    # line list is capped
+    check("line list capped at 10", sv._line_list(list(range(1, 15))) == "1, 2, 3, 4, 5, 6, 7, 8, 9, 10, ... +4",
+          sv._line_list(list(range(1, 15))))
+
+    # not checked: switch off, dry run, nothing redacted, unredacted category
+    sv._RE_SSID = re.compile(r'(?!x)x()()()')
+    try:
+        r_off = sv.process_all([fx["debug"]], log=quiet, status=quiet, leak_check=False,
+                               out_dir=os.path.join(tmp, "o_leak_off"))
+        r_cat = sv.process_all([fx["debug"]], log=quiet, status=quiet,
+                               enabled=("network", "location", "serial"),
+                               out_dir=os.path.join(tmp, "o_leak_cat"))
+    finally:
+        sv._RE_SSID = old
+    check("leak_check=False: no check", r_off[0]["leaks"] is None, str(r_off[0]["leaks"]))
+    check("unredacted category is not reported (hotspot off)", r_cat[0]["leaks"] == {},
+          str(r_cat[0]["leaks"]))
+    r_none = sv.process_all([fx["debug"]], log=quiet, status=quiet, enabled=(),
+                            out_dir=os.path.join(tmp, "o_leak_none"))
+    r_dry = sv.process_all([fx["debug"]], log=quiet, status=quiet, report=True)
+    check("nothing redacted / dry run: not checked, table shows '-'",
+          r_none[0]["leaks"] is None and r_dry[0]["leaks"] is None
+          and sv.results_table(r_dry, "en")[2].split()[-3] == "-", sv.results_table(r_dry, "en")[2])
+    a = sv.build_parser().parse_args(["--no-leak-check", "x"])
+    check("CLI: --no-leak-check switch", a.leak_check is False and
+          sv.build_parser().parse_args(["x"]).leak_check is True)
+    cp = run([sys.executable, TOOL, fx["debug"], "-o", os.path.join(tmp, "o_leak_cli"), "--lang", "en"])
+    check("CLI: summary table has the 'Leaks' column", "Leaks" in cp.stdout and cp.returncode == 0,
+          cp.stdout + cp.stderr)
+
+
 def build_fixtures(tmp):
     d = os.path.join(tmp, "fix")
     fx = {"dir": d}
@@ -1561,6 +1760,7 @@ def main():
         t_app(fx, tmp)
         t_placeholders(fx, tmp)
         t_any_net(fx, tmp)
+        t_leak_check(fx, tmp)
         t_gui(fx, tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
