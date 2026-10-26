@@ -44,7 +44,7 @@ import bisect
 #  Version / known-good markers
 # ----------------------------------------------------------------------------
 
-TOOL_VERSION = "1.3.0"
+TOOL_VERSION = "1.4.0"
 COPYRIGHT = "Copyright (C) 2026 ph3x"
 KNOWN_APP_VERSIONS = ("2.0.37",)      # GuideLog "Version:" values seen so far
 KNOWN_PROTOCOL = ("2",)               # GuideLog "Version protocol:" values
