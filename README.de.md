@@ -39,7 +39,9 @@ Scheitert der erste Befehl mit `ModuleNotFoundError`, fehlt tkinter:
   wählen und „tcl/tk and IDLE“ anhaken (standardmäßig angehakt).
 - Linux: tkinter ist meist ein eigenes Paket, z. B. `tk` unter Arch/CachyOS,
   `python3-tk` unter Debian/Ubuntu.
-- macOS: nicht getestet.
+- macOS (getestet mit macOS 27.2 auf Apple Silicon, Python 3.13): Der Installer
+  von python.org enthält tkinter. Beim Python von Homebrew das passende Tk-Paket
+  installieren, z. B. `brew install python-tk@3.13`.
 
 ## Benutzung
 
@@ -193,7 +195,8 @@ python test_decovita.py
 
 Die Fenster-Tests brauchen tkinter, unter Linux zusätzlich `Xvfb` (sonst werden sie
 als SKIP gemeldet). Unter Windows und macOS öffnen sie sich kurz auf dem Desktop.
-Jeder Pull Request wird automatisch unter Linux und Windows getestet (GitHub Actions).
+Jeder Pull Request wird automatisch unter Linux, Windows und macOS getestet
+(GitHub Actions).
 
 ## Mitmachen
 
