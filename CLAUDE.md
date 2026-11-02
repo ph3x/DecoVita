@@ -2,7 +2,7 @@
 
 Unofficial tool to decode, redact and convert the log files of the ToupTek
 StellaVita astrophotography controller (Raspberry Pi CM4 inside). No connection
-to ToupTek. Current version: see `TOOL_VERSION` in `decovita.py` (1.4.0 at the
+to ToupTek. Current version: see `TOOL_VERSION` in `decovita.py` (1.4.1 at the
 time of writing).
 
 ## Repository layout
