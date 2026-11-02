@@ -13,7 +13,7 @@ time of writing).
 | `test_decovita.py` | Self-contained test suite with synthetic, fully fictitious fixtures. |
 | `README.md` / `README.de.md` | User-facing description, English / German. Keep both in sync. |
 | `LICENSE` | GPL v3 full text (canonical gnu.org version). |
-| `.github/ISSUE_TEMPLATE/` | Bug report form (warns against original logs, #10) and its config. |
+| `.github/ISSUE_TEMPLATE/` | Bug report form (warns against original logs, #10), log sample form for unknown events (#37) and their config. |
 | `.gitignore` | Keeps logs, outputs, `CLAUDE.local.md` and `.secrets/` out of the repo. |
 | `CLAUDE.md` | This file: rules and technical notes for Claude (and human contributors). |
 
