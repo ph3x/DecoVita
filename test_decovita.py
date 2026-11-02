@@ -91,6 +91,23 @@ def gui_display(platform, have_xvfb):
     return "xvfb" if have_xvfb else None
 
 
+def shot_cmd(platform, path):
+    """Screenshot command for the whole screen (DV_TEST_SHOTS): Windows PowerShell +
+    System.Drawing, macOS `screencapture`, else ImageMagick `import` (X11/Xvfb).
+    Also pasted into the GUI probe, so it must stay self-contained."""
+    if platform == "win32":
+        ps = ("Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
+              "$b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; "
+              "$i=New-Object System.Drawing.Bitmap $b.Width,$b.Height; "
+              "$g=[System.Drawing.Graphics]::FromImage($i); "
+              "$g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size); "
+              "$i.Save('%s',[System.Drawing.Imaging.ImageFormat]::Png)" % path.replace("'", "''"))
+        return ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps]
+    if platform == "darwin":
+        return ["screencapture", "-x", "-t", "png", path]     # -x: no shutter sound
+    return ["import", "-window", "root", path]
+
+
 def sha(path):
     return hashlib.sha256(open(path, "rb").read()).hexdigest()
 
@@ -995,6 +1012,13 @@ def t_harness():
           gui_display("win32", False) == "native" and gui_display("darwin", False) == "native")
     check("window tests: Xvfb on Linux, skip without it",
           gui_display("linux", True) == "xvfb" and gui_display("linux", False) is None)
+    check("screenshots: screencapture on macOS, PowerShell on Windows, import on Linux (#43)",
+          shot_cmd("darwin", "a.png") == ["screencapture", "-x", "-t", "png", "a.png"]
+          and shot_cmd("win32", "a.png")[0] == "powershell"
+          and shot_cmd("linux", "a.png") == ["import", "-window", "root", "a.png"])
+    src = _gui_probe_source()
+    check("GUI probe contains shot_cmd and still compiles",
+          "def shot_cmd(" in src and compile(src, "<probe>", "exec") is not None)
 
 
 def t_menu(fx, tmp):
@@ -1115,23 +1139,14 @@ SHOTS = os.environ.get("DV_TEST_SHOTS")
 
 def shot(root, name):
     """Optional screenshot of the whole screen (CI artifact): DV_TEST_SHOTS=<folder>.
-    Linux: ImageMagick 'import'; Windows: PowerShell + System.Drawing."""
+    The command comes from shot_cmd() (pasted in front of this probe)."""
     if not SHOTS:
         return
     import subprocess, time
     os.makedirs(SHOTS, exist_ok=True)
     path = os.path.join(SHOTS, name + ".png")
     root.lift(); root.update(); time.sleep(0.5); root.update()
-    if sys.platform == "win32":
-        ps = ("Add-Type -AssemblyName System.Windows.Forms,System.Drawing; "
-              "$b=[System.Windows.Forms.Screen]::PrimaryScreen.Bounds; "
-              "$i=New-Object System.Drawing.Bitmap $b.Width,$b.Height; "
-              "$g=[System.Drawing.Graphics]::FromImage($i); "
-              "$g.CopyFromScreen($b.Location,[System.Drawing.Point]::Empty,$b.Size); "
-              "$i.Save('%s',[System.Drawing.Imaging.ImageFormat]::Png)" % path.replace("'", "''"))
-        cmd = ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps]
-    else:
-        cmd = ["import", "-window", "root", path]
+    cmd = shot_cmd(sys.platform, path)
     try:
         p = subprocess.run(cmd, capture_output=True, timeout=60)
         err = p.stderr.decode("utf-8", "replace")[-200:]
@@ -1190,6 +1205,13 @@ print(json.dumps(res))
 '''
 
 
+def _gui_probe_source():
+    """The GUI probe with shot_cmd() pasted in after its imports."""
+    import inspect
+    head, sep, rest = _GUI_PROBE.partition("import tkinter as tk\n")
+    return head + sep + "\n" + inspect.getsource(shot_cmd) + "\n" + rest
+
+
 def _gui_layout_and_outdir(fx, tmp, env):
     import json
     work = os.path.join(tmp, "gui_probe_in")
@@ -1200,7 +1222,7 @@ def _gui_layout_and_outdir(fx, tmp, env):
     out_file = os.path.join(tmp, "gui_probe_isfile")
     write(out_file, "x")
     env = {k: v for k, v in env.items() if not k.startswith("DV_GUI_")}
-    p = run([sys.executable, "-c", _GUI_PROBE, TOOL, src, out_new, out_file, "de"], env=env)
+    p = run([sys.executable, "-c", _gui_probe_source(), TOOL, src, out_new, out_file, "de"], env=env)
     try:
         r = json.loads(p.stdout.strip().splitlines()[-1])
     except Exception:

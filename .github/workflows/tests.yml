@@ -1,8 +1,8 @@
 # SPDX-FileCopyrightText: 2026 ph3x
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Full test suite (incl. GUI tests) on Linux and Windows for every pull request
-# and every push to main (#28). GUI screenshots are uploaded as run artifacts.
+# Full test suite (incl. GUI tests) on Linux, Windows and macOS for every pull
+# request and every push to main (#28, #43). GUI screenshots are uploaded as run artifacts.
 name: tests
 
 on:
@@ -33,6 +33,10 @@ jobs:
           - { os: ubuntu-latest, python: "3.11" }
           - { os: ubuntu-latest, python: "3.14" }
           - { os: windows-latest, python: "3.14" }
+          # macOS (#43): Tk draws on the runner's desktop session (no Xvfb), so the
+          # GUI tests run and DV_TEST_REQUIRE_GUI=1 applies; screenshots via
+          # screencapture. "tkinter without display" stays a plain SKIP on darwin.
+          - { os: macos-latest, python: "3.14" }
     steps:
       - uses: actions/checkout@v4
 

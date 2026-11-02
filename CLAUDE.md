@@ -26,16 +26,20 @@ python decovita.py --help                   # all switches
 python test_decovita.py [path/to/decovita.py]   # run ALL tests after every change
 ```
 
-Supported Python: tested on 3.11, 3.12, 3.13, 3.14. The GUI needs tkinter, which on
+Supported Python: tested on 3.11, 3.12, 3.13, 3.14. Platforms: Linux, Windows and
+macOS (macOS verified manually 2026-11-02 on macOS 27.2, arm64, Python 3.13: suite
+incl. GUI passed, outputs of real logs sha256-identical to Linux). The GUI needs tkinter, which on
 Arch/CachyOS requires the system package `tk`. On Linux the GUI tests also need `Xvfb`;
 on Windows and macOS they run directly on the desktop session. Without tkinter (or
 Xvfb on Linux) those tests are reported as SKIP, not FAIL.
 
 **CI** (`.github/workflows/tests.yml`, #28): every pull request and every push to `main`
 runs the full suite incl. GUI tests on `ubuntu-latest` (Python 3.11 and 3.14, Xvfb) and
-`windows-latest` (Python 3.14). There `DV_TEST_REQUIRE_GUI=1` turns a skipped GUI test
-into a FAIL, and `DV_TEST_SHOTS=<dir>` stores GUI screenshots (Linux: ImageMagick
-`import`, Windows: PowerShell), uploaded as run artifacts.
+`windows-latest` and `macos-latest` (Python 3.14 each, #43; GUI on the native desktop).
+There `DV_TEST_REQUIRE_GUI=1` turns a skipped GUI test into a FAIL (the darwin/win32
+skip of "tkinter without display" is a plain SKIP and stays one), and
+`DV_TEST_SHOTS=<dir>` stores GUI screenshots (`shot_cmd`: Linux ImageMagick `import`,
+Windows PowerShell, macOS `screencapture`), uploaded as run artifacts.
 
 ## Ground rules
 
