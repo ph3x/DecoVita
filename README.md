@@ -194,6 +194,14 @@ Bug reports, ideas and pull requests are welcome, via
 - **Bug reports:** please use the bug report form. It asks for the DecoVita
   version (window title or `--help`), operating system, Python version, the
   command or steps you used, and the message or the summary table.
+- **Log samples wanted:** the night analysis should later recognise filter
+  changes, meridian flips and autofocus runs, but the formats of these events are
+  not known yet. If your setup has a filter wheel, a focuser or does meridian
+  flips, please share a redacted excerpt with the
+  [log sample form](https://github.com/ph3x/DecoVita/issues/new?template=log_sample.yml).
+  Only the lines around the event from DecoVita's output, never the original log.
+  Check every line yourself: DecoVita may not yet know personal data that these
+  events contain.
 - **Never attach original logs.** They contain your Wi-Fi names, network addresses,
   location and serial numbers. If a log excerpt is needed, use the tool's redacted
   output and check it line by line before posting. Log file names contain the date

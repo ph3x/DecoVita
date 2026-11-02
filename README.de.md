@@ -204,6 +204,14 @@ Fehlermeldungen, Ideen und Pull Requests sind willkommen, über
   nach DecoVita-Version (Fenstertitel oder `--help`), Betriebssystem,
   Python-Version, dem verwendeten Befehl bzw. den Schritten sowie der Meldung oder
   der Übersichtstabelle.
+- **Log-Proben gesucht:** Die Nachtanalyse soll später Filterwechsel,
+  Meridian-Flips und Autofokus-Läufe erkennen, aber die Formate dieser Ereignisse
+  sind noch unbekannt. Hast du ein Filterrad, einen Fokussierer oder Nächte mit
+  Meridian-Flip, teile bitte einen geschwärzten Auszug über das
+  [Formular für Log-Proben](https://github.com/ph3x/DecoVita/issues/new?template=log_sample.yml).
+  Nur die Zeilen rund um das Ereignis aus der Ausgabe von DecoVita, nie das
+  Original-Log. Prüfe jede Zeile selbst: Persönliche Daten in diesen Ereignissen
+  kennt DecoVita vielleicht noch nicht.
 - **Niemals Original-Logs anhängen.** Sie enthalten deine WLAN-Namen,
   Netzwerkadressen, deinen Standort und Seriennummern. Wird ein Log-Auszug
   gebraucht, nimm die geschwärzte Ausgabe des Tools und prüfe sie Zeile für Zeile,

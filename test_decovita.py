@@ -1932,6 +1932,42 @@ def t_issue_template():
               word in open(os.path.join(HERE, rd), encoding="utf-8").read())
 
 
+def t_log_sample_template():
+    """#37: the log sample form asks for redacted, self-checked excerpts only."""
+    print("\n[25] Log sample template (#37)")
+    path = os.path.join(HERE, ".github", "ISSUE_TEMPLATE", "log_sample.yml")
+    if not os.path.exists(path):
+        check("log sample template exists", False, path)
+        return
+    txt = open(path, encoding="utf-8").read()
+    check("log sample: SPDX lines",
+          "SPDX-FileCopyrightText" in txt and "SPDX-License-Identifier: GPL-3.0-or-later" in txt)
+    check("log sample: warns against original logs",
+          "Never attach original logs" in txt and "Issues are public" in txt)
+    prefixes = [p for p in ("GuideLog_", "DebugLog_", "Logs_App_") if p in sv._LOG_NAME.pattern]
+    check("log sample: names every log type DecoVita reads",
+          len(prefixes) == 3 and all(p in txt for p in prefixes) and ".glog" in txt, str(prefixes))
+    check("log sample: points to the redacted output", "_decoded" in txt and "_plain" not in txt)
+    check("log sample: asks to check every line (unknown personal data)",
+          "Check every line yourself" in txt and "does not recognise yet" in txt)
+    check("log sample: asks to replace dates and file names",
+          "<date>" in txt and "file names" in txt.lower())
+    for ev in ("Filter change", "Meridian flip", "Autofocus"):
+        check("log sample: offers event %r" % ev, "- " + ev in txt)
+    for fid in ("id: event", "id: version", "id: firmware", "id: setup", "id: excerpt"):
+        check("log sample: has field %s" % fid.split()[-1], fid in txt)
+    m = re.search(r"id: excerpt.*?required: true", txt, re.S)
+    check("log sample: excerpt is required",
+          bool(m) and "type: textarea" not in m.group(0)[len("id: excerpt"):])
+    m = re.search(r"type: checkboxes.*?required: true", txt, re.S)
+    check("log sample: required privacy checkbox",
+          bool(m) and "did not attach original logs" in m.group(0) and "checked each line" in m.group(0))
+    link = "issues/new?template=log_sample.yml"
+    for rd, word in (("README.md", "Log samples wanted"), ("README.de.md", "Log-Proben gesucht")):
+        body = open(os.path.join(HERE, rd), encoding="utf-8").read()
+        check("%s asks for log samples and links the form" % rd, word in body and link in body)
+
+
 def main():
     tmp = tempfile.mkdtemp(prefix="svtest_")
     try:
@@ -1961,6 +1997,7 @@ def main():
         t_confidence(fx, tmp)
         t_selftest(fx, tmp)
         t_issue_template()
+        t_log_sample_template()
         t_gui(fx, tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
