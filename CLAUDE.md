@@ -117,7 +117,7 @@ Windows PowerShell, macOS `screencapture`), uploaded as run artifacts.
   `unknown`; if the name matches `_LOG_NAME`, the file gets `unknown_format` and the
   table state `format changed?`. Table column `Conf`/`sicher`, `!` below the threshold.
 - **Selftest (#9):** `_SELFTEST` = fictitious sample lines (DebugLog, gphoto line without
-  timestamp, GuideLog, app incl. non-ASCII) with **fixed** cipher bytes, expected
+  timestamp, GuideLog, app incl. non-ASCII and AstroChartUtil #48) with **fixed** cipher bytes, expected
   plain/redacted text and leak-check categories. `selftest()` -> (checks, failed names);
   `selftest_ok(lang, log)` runs silently before every CLI/menu/GUI run and stops the
   run (exit 2) on failure; `--selftest` runs it alone (exit 0/1). A constant key
@@ -247,6 +247,15 @@ cipher, but:
   `…TimeZoneHourOffset [y, m, d, h, m, s]   tz---lat---lon`; GPS `alt=`/`mslAlt=` in
   `bestLocation Location[…]` (Android already masks lat/lon there). The generic
   IPv4/MAC rules now run for every log type (#25).
+- **AstroChartUtil line** (#48, verified 2026-11-06, 1 of 16 real app logs):
+  `AstroChartUtil latitude----- <lat>longitude----- <lon>ra----- <ra>dec----- <dec>curTime:--<h>:<m>:<s>curTimestamp:---<h>:<m>:<s>-----<t1>----<t2>`
+  (no separator before `longitude`/`ra`/`dec`/`curTime`; lat/lon with 4 decimals;
+  `curTime`/`curTimestamp` are hours since the epoch, UTC). `t1` (`hh:mm:ss`) is the
+  local sidereal time of `curTimestamp` plus a constant (checked: constant offset to
+  the LST from the logged longitude), so it gives the longitude; `t2`'s meaning is
+  unknown. Decision: lat/lon rounded to 1 decimal like the other app rules, `t1`
+  and `t2` -> `<REDACTED>`; RA/Dec and the two epoch times stay. Leak check:
+  `curTimestamp:…-----<digit>` in `_LK_LOC_MISC`.
 - **Twilight block** (verified 2026-10-25): `Data1 <deg> deg rise|down|sunrise|sunset
   time D h m s.ssss` for -18/-12/-6/-0.833 deg, the two decimal hours in the
   `longitude-time1` line (-18 deg dawn/dusk) and `TwilightData{…mHours/mMinutes/
@@ -441,7 +450,7 @@ phdlogview ignores these lines. When the tool reads its own output again, it ski
   so a window that waits for input fails the check instead of hanging the suite. The
   test "tkinter without display" is skipped on Windows/macOS: removing `DISPLAY` hides
   nothing there.
-- **Last run:** 466/466 passed on Python 3.14 with Xvfb (2026-11-06); CI results: see the Actions tab.
+- **Last run:** 480/480 passed on Python 3.14 with Xvfb (2026-11-06); CI results: see the Actions tab.
 - **Fixtures:** built in a temp dir from fake plaintext and encrypted with `encode_line`.
   All values are invented (e.g. `FAKE_HOME`/`FAKE_HOME_EXT`, `FAKESERIAL…`,
   `192.168.77.x`).

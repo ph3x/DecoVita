@@ -336,7 +336,13 @@ APP_FAKE = {
     "mac": "de:ad:be:ef:00:01", "ip_phone": "192.168.77.105", "ip_box": "10.0.42.1",
     "lat7": "12.3456789", "lon7": "23.4567891", "alt": "345.67890123", "msl": "298.7654321",
     "model": "FAKE-MODEL1",
+    # AstroChartUtil line (#48): lat/lon with 4 decimals, sidereal time, 2nd time
+    "acu_lat": "12.3456", "acu_lon": "-23.4568", "acu_lst": "05:21:07", "acu_t2": "03:58:46",
 }
+
+
+ACU_LINE = ("AstroChartUtil latitude----- %slongitude----- %sra----- 1.330000000000000dec----- "
+            "58.300000000000001curTime:--493123:14:07curTimestamp:---493123:15:31-----%s----%s")
 
 
 def app_plain():
@@ -397,6 +403,7 @@ def app_plain():
                          ("-0.833", "sunrise", "16 6 41 2.5"), ("-0.833", "sunset", "15 16 19 38.25")):
         a("Data1 %s deg %s time %s" % (deg, kind, t))
     a("Update longitude and latitude: %s,%s" % (A["lon7"], A["lat7"]))
+    a(ACU_LINE % (A["acu_lat"], A["acu_lon"], A["acu_lst"], A["acu_t2"]))
     a("bestLocation Location[gps 12******,23****** hAcc=12.345 et=+1d2h3m4s567ms alt=%s vAcc=1.5 mslAlt=%s "
       "mslAltAcc=2.0 vel=0.0 bear=0.0 {Bundle[{satellites=0, maxCn0=0, QUICKGPS=true, HDACC=0.0, "
       "SourceType=128, meanCn0=0, loc_type=1}]}]gps:[passive, network, fused, gps]" % (A["alt"], A["msl"]))
@@ -1420,6 +1427,59 @@ def t_app(fx, tmp):
           "%s vs %s" % (res[0]["redactions"], r["redactions"]))
 
 
+def t_app_astrochart(fx, tmp):
+    """#48: AstroChartUtil line in app logs (lat/lon, sidereal time)."""
+    print("\n[18b] App log AstroChartUtil coordinates (#48)")
+    A = APP_FAKE
+    want = ACU_LINE % ("12.3", "-23.5", "<REDACTED>", "<REDACTED>")
+
+    def run(tag):
+        r = sv.process_file(fx["app"], out_dir=os.path.join(tmp, tag), log=quiet, force=True)
+        with open(r["outputs"][0], encoding="utf-8") as f:
+            lines = f.read().split("\n")
+        hits = sv.check_leaks(r["outputs"][0]).get("location", [])
+        acu = [n for n, ln in enumerate(lines, 1) if "AstroChartUtil" in ln]
+        return r, "\n".join(lines), hits, acu
+
+    r, txt, hits, acu = run("o_acu")
+    check("AstroChartUtil: lat/lon rounded to 1 decimal, both times -> <REDACTED>",
+          len(acu) == 1 and txt.count(want) == 1, txt[:0])
+    check("AstroChartUtil: fake values gone",
+          all(A[k] not in txt for k in ("acu_lat", "acu_lon", "acu_lst", "acu_t2")))
+    check("AstroChartUtil: RA/Dec and curTime/curTimestamp kept",
+          "ra----- 1.330000000000000dec----- 58.300000000000001curTime:--493123:14:07"
+          "curTimestamp:---493123:15:31-----" in txt)
+    check("AstroChartUtil: leak check clean on the line", not set(hits) & set(acu), str(hits))
+
+    # counter-check: without the new rules the values stay and the leak check flags the line
+    old = sv._RE_APP_LATLON, sv._RE_APP_ASTRO_TIMES
+    sv._RE_APP_LATLON = old[0][:-1]
+    sv._RE_APP_ASTRO_TIMES = re.compile(r'(?!x)x()()()()')
+    try:
+        r0, txt0, hits0, acu0 = run("o_acu_without")
+    finally:
+        sv._RE_APP_LATLON, sv._RE_APP_ASTRO_TIMES = old
+    check("AstroChartUtil counter-check: without the rules the values stay",
+          want not in txt0 and all(A[k] in txt0 for k in ("acu_lat", "acu_lon", "acu_lst", "acu_t2")))
+    check("AstroChartUtil counter-check: leak check flags the line", acu0 and acu0[0] in hits0,
+          "%s / %s" % (hits0, acu0))
+    check("AstroChartUtil: 4 more location redactions than without the rules",
+          r["redactions"]["location"] == r0["redactions"]["location"] + 4,
+          "%s / %s" % (r["redactions"], r0["redactions"]))
+    sv._RE_APP_ASTRO_TIMES = re.compile(r'(?!x)x()()()()')
+    try:
+        _, txt1, hits1, acu1 = run("o_acu_no_times")
+    finally:
+        sv._RE_APP_ASTRO_TIMES = old[1]
+    check("AstroChartUtil counter-check: unredacted sidereal time alone is flagged",
+          A["acu_lst"] in txt1 and acu1 and acu1[0] in hits1, "%s / %s" % (hits1, acu1))
+    r_off = sv.process_file(fx["app"], out_dir=os.path.join(tmp, "o_acu_off"), log=quiet, force=True,
+                            enabled=tuple(c for c in sv.CATEGORIES if c != "location"))
+    t_off = "\n".join(body(r_off["outputs"][0]))
+    check("AstroChartUtil: --no-redact-location keeps the values",
+          all(A[k] in t_off for k in ("acu_lat", "acu_lon", "acu_lst", "acu_t2")))
+
+
 def t_any_net(fx, tmp):
     """#25: the generic private-IPv4 and MAC rules run for every log type."""
     print("\n[20] Private IPv4 and MAC rules for device logs (#25)")
@@ -1602,6 +1662,8 @@ LEAK_LINES = [
     ("location", "2026-01-15 20:15:05 | BrokenLineView drawTwilightBackgroundutcTimeZoneHourOffset [2026, 1, 15, 20, 15, 30]   1.0---12.3456789---23.5"),
     ("location", "2026-01-15 20:15:05 | bestLocation Location[gps 12******,23****** hAcc=12.345 et=+1d2h3m4s567ms alt=345.67890123 vAcc=1.5 mslAlt=<REDACTED>]"),
     ("location", "2026-01-15 20:15:06 | Update longitude and latitude: 23.4567891,12.3"),
+    ("location", "2026-01-15 20:15:06 | " + ACU_LINE % ("12.3456", "-23.4", "<REDACTED>", "<REDACTED>")),
+    ("location", "2026-01-15 20:15:06 | " + ACU_LINE % ("12.3", "-23.4", "05:21:07", "<REDACTED>")),
     ("location", "[20:15:01.021] MeridianFlip::calculateData meridian RA (LST):-1.234567"),
     ("location", "[20:15:01.022] MeridianFlip::flipIfNeeded 0 compare meridian offset:2.345678"),
     ("hotspot", '[20:15:00.200] [CoreServer][RES] {"id":1,"code":0,"CMD_GLOBAL_GET_WIFI":{"ssid":"FAKE_HOME","password":"<REDACTED>"}}'),
@@ -1637,6 +1699,7 @@ LEAK_CLEAN = [
     "2026-01-15 20:15:11 | Data1 -18 deg rise time <REDACTED>",
     "2026-01-15 20:15:11 | Data1 UT time 2026 1 15 19 15 30 offset 1.0",
     "2026-01-15 20:15:11 | BrokenLineView drawTwilightBackgroundutcTimeZoneHourOffset [2026, 1, 15, 20, 15, 30]   1.0---12.3---23.5",
+    "2026-01-15 20:15:11 | " + ACU_LINE % ("12.3", "-23.5", "<REDACTED>", "<REDACTED>"),
     "2026-01-15 20:15:12 | bestLocation Location[gps 12******,23****** hAcc=12.345 et=+1d2h3m4s567ms alt=<REDACTED> vAcc=1.5 mslAlt=<REDACTED>]",
     "2026-01-15 20:15:12 | RecordWifiTrace networkCallback TransportInfo: <SSID: <unknown ssid>, BSSID: 02:00:00:00:00:00, MAC: 02:00:00:00:00:00, IP: /192.168.<N3>.105",
     "2026-01-15 20:15:12 | lastWifiName:--curWifi:--curBoxWifi:<SSID_2>",
@@ -1899,6 +1962,19 @@ def t_selftest(fx, tmp):
         finally:
             setattr(sv, attr, orig)
         check("selftest fails with a broken %s" % name, any(f.endswith(part) for f in failed), str(failed))
+    # #48: the AstroChartUtil sample line fails without its rules
+    check("selftest has the AstroChartUtil line (#48)",
+          any("AstroChartUtil" in p for _, _, p, _, _ in sv._SELFTEST))
+    old = sv._RE_APP_LATLON, sv._RE_APP_ASTRO_TIMES
+    sv._RE_APP_LATLON = old[0][:-1]
+    sv._RE_APP_ASTRO_TIMES = re.compile(r'(?!x)x()()()()')
+    try:
+        failed = sv.selftest()[1]
+    finally:
+        sv._RE_APP_LATLON, sv._RE_APP_ASTRO_TIMES = old
+    idx = [i for i, e in enumerate(sv._SELFTEST, 1) if "AstroChartUtil" in e[2]]
+    check("selftest fails without the AstroChartUtil rules",
+          idx and "%d/app redact" % idx[0] in failed and "%d/app leak check" % idx[0] in failed, str(failed))
     crash = sv.Redactor.feed
     sv.Redactor.feed = lambda self, line: 1 / 0
     try:
@@ -2069,6 +2145,7 @@ def main():
         t_progress_i18n(fx, tmp)
         t_menu(fx, tmp)
         t_app(fx, tmp)
+        t_app_astrochart(fx, tmp)
         t_placeholders(fx, tmp)
         t_any_net(fx, tmp)
         t_leak_check(fx, tmp)
