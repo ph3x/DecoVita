@@ -1962,6 +1962,19 @@ def t_selftest(fx, tmp):
         finally:
             setattr(sv, attr, orig)
         check("selftest fails with a broken %s" % name, any(f.endswith(part) for f in failed), str(failed))
+    # #48: the AstroChartUtil sample line fails without its rules
+    check("selftest has the AstroChartUtil line (#48)",
+          any("AstroChartUtil" in p for _, _, p, _, _ in sv._SELFTEST))
+    old = sv._RE_APP_LATLON, sv._RE_APP_ASTRO_TIMES
+    sv._RE_APP_LATLON = old[0][:-1]
+    sv._RE_APP_ASTRO_TIMES = re.compile(r'(?!x)x()()()()')
+    try:
+        failed = sv.selftest()[1]
+    finally:
+        sv._RE_APP_LATLON, sv._RE_APP_ASTRO_TIMES = old
+    idx = [i for i, e in enumerate(sv._SELFTEST, 1) if "AstroChartUtil" in e[2]]
+    check("selftest fails without the AstroChartUtil rules",
+          idx and "%d/app redact" % idx[0] in failed and "%d/app leak check" % idx[0] in failed, str(failed))
     crash = sv.Redactor.feed
     sv.Redactor.feed = lambda self, line: 1 / 0
     try:

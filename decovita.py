@@ -1423,6 +1423,18 @@ _SELFTEST = (
      '2026-01-15 20:15:11 | BoxDeviceManager Bridge IP: 10.0.42.1',
      '2026-01-15 20:15:11 | BoxDeviceManager Bridge IP: 10.0.<N1>.1',
      ("network",)),
+    ("app",                             # AstroChartUtil lat/lon + sidereal time (#48)
+     b"ZY\\aY]_\\afRedoglrjl[Z]!TVUS(NHZ]?_UYl[Qe[giY[$%&'(z.0-3579pttnq}"
+     b'!oq:;<=>2@FHDKMOR/}JKLMMASQWXVWXYZ[\\]^_`ab9;:cdefg[qulrpqrstuvwx'
+     b'yz{|~SfdG]b[1%&.4/.02:26=4<i|z]sxq"$p}#L@ABJPKJLNVNSYSQNOPQRV\\b['
+     b'[e\\d[\\]^bfnjnqlo',
+     '2026-01-15 20:15:12 | AstroChartUtil latitude----- 12.3456longitude----- -23.4568'
+     'ra----- 1.330000000000000dec----- 58.300000000000001curTime:--493123:14:07'
+     'curTimestamp:---493123:15:31-----05:21:07----03:58:46',
+     '2026-01-15 20:15:12 | AstroChartUtil latitude----- 12.3longitude----- -23.5'
+     'ra----- 1.330000000000000dec----- 58.300000000000001curTime:--493123:14:07'
+     'curTimestamp:---493123:15:31-----<REDACTED>----<REDACTED>',
+     ("location",)),
 )
 
 

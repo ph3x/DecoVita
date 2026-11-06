@@ -117,7 +117,7 @@ Windows PowerShell, macOS `screencapture`), uploaded as run artifacts.
   `unknown`; if the name matches `_LOG_NAME`, the file gets `unknown_format` and the
   table state `format changed?`. Table column `Conf`/`sicher`, `!` below the threshold.
 - **Selftest (#9):** `_SELFTEST` = fictitious sample lines (DebugLog, gphoto line without
-  timestamp, GuideLog, app incl. non-ASCII) with **fixed** cipher bytes, expected
+  timestamp, GuideLog, app incl. non-ASCII and AstroChartUtil #48) with **fixed** cipher bytes, expected
   plain/redacted text and leak-check categories. `selftest()` -> (checks, failed names);
   `selftest_ok(lang, log)` runs silently before every CLI/menu/GUI run and stops the
   run (exit 2) on failure; `--selftest` runs it alone (exit 0/1). A constant key
@@ -450,7 +450,7 @@ phdlogview ignores these lines. When the tool reads its own output again, it ski
   so a window that waits for input fails the check instead of hanging the suite. The
   test "tkinter without display" is skipped on Windows/macOS: removing `DISPLAY` hides
   nothing there.
-- **Last run:** 478/478 passed on Python 3.14 with Xvfb (2026-11-06); CI results: see the Actions tab.
+- **Last run:** 480/480 passed on Python 3.14 with Xvfb (2026-11-06); CI results: see the Actions tab.
 - **Fixtures:** built in a temp dir from fake plaintext and encrypted with `encode_line`.
   All values are invented (e.g. `FAKE_HOME`/`FAKE_HOME_EXT`, `FAKESERIAL…`,
   `192.168.77.x`).
