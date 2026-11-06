@@ -1052,6 +1052,19 @@ def t_version(fx, tmp):
           str(r["warnings"]))
     r = sv.process_file(fx["guide"], out_dir=out, force=True, log=quiet)
     check("known version -> no warning", not r["warnings"], str(r["warnings"]))
+    # #49: newer firmware versions seen in real GuideLogs; an unseen one still warns
+    for ver, known in (("2.0.38", True), ("2.0.42", True), ("2.0.43", True),
+                       ("2.0.99", False)):
+        gl, _ = guide_plain(version=ver)
+        src = os.path.join(tmp, "ver_%s" % ver.replace(".", "_"),
+                           "GuideLog_2026-01-15_201502.txt")
+        write(src, encrypt_lines(gl))
+        r = sv.process_file(src, out_dir=out, force=True, log=quiet)
+        warned = any(w.startswith("version:%s/" % ver) for w in r["warnings"])
+        check("GuideLog version %s -> %s" % (ver, "no warning" if known else "warning"),
+              warned != known, str(r["warnings"]))
+        check("GuideLog version %s -> no other warning" % ver,
+              all(w.startswith("version:") for w in r["warnings"]), str(r["warnings"]))
 
 
 def t_cli(fx, tmp):
