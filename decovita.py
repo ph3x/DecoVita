@@ -413,7 +413,12 @@ _RE_APP_LATLON = (
     re.compile(r'(longitude and latitude: )(-?\d+(?:\.\d+)?)(,)(-?\d+(?:\.\d+)?)'),
     re.compile(r'(longitude-time\d* -?\d+-----)(-?\d+(?:\.\d+)?)( latitude )(-?\d+(?:\.\d+)?)'),
     re.compile(r'(TimeZoneHourOffset \[[^\]]*\]\s+-?[\d.]+---)(-?\d+(?:\.\d+)?)(---)(-?\d+(?:\.\d+)?)'),
+    re.compile(r'(AstroChartUtil latitude-----\s*)(-?\d+(?:\.\d+)?)(longitude-----\s*)(-?\d+(?:\.\d+)?)'),
 )
+# "AstroChartUtil latitude----- a longitude----- b ra----- … curTime:--…
+# curTimestamp:---<h:m:s>-----<lst>----<t2>" (#48): the first trailing time is
+# the local sidereal time (gives the longitude), the second one is blanked too
+_RE_APP_ASTRO_TIMES = re.compile(r'(curTimestamp:-*[\d:.]+-----)(-?[\d:.]+)(----)(-?[\d:.]+)')
 _RE_APP_ALT = re.compile(r'(\b(?:alt|mslAlt)=)(-?\d+(?:\.\d+)?)')
 # twilight / sunrise / sunset times: together with the date they give the site
 _RE_APP_TWI = (
@@ -662,11 +667,13 @@ class Redactor:
             if " time " in line or "TwilightData" in line:
                 for rx in _RE_APP_TWI:
                     line = rx.sub(blank, line)
+            def hours(m):
+                self.counts["location"] += 2
+                return m.group(1) + REDACTED + m.group(3) + REDACTED
             if "-=---" in line:
-                def hours(m):
-                    self.counts["location"] += 2
-                    return m.group(1) + REDACTED + m.group(3) + REDACTED
                 line = _RE_APP_TWI_HOURS.sub(hours, line)
+            if "curTimestamp:" in line:
+                line = _RE_APP_ASTRO_TIMES.sub(hours, line)
         return line
 
     # -- public ----------------------------------------------------------
@@ -740,11 +747,13 @@ _LK_MAC = re.compile(r'(?<![0-9A-Fa-f:-])[0-9A-Fa-f]{2}([:-])[0-9A-Fa-f]{2}'
 _LK_MAC_OK = frozenset(("00:00:00:00:00:00", "02:00:00:00:00:00", "ff:ff:ff:ff:ff:ff"))
 _LK_LATLON = re.compile(r'(?<![A-Za-z])(?:lat|lon|long|latitude|longitude)(?![A-Za-z])'
                         r'[^A-Za-z\n]{0,15}?\d{1,3}\.\d{2}', re.I)
-# twilight times, GPS altitude and "...HourOffset [date] tz---lat---lon" (app
-# log) give the site too; other "a---b" pairs are RA/Dec
+# twilight times, GPS altitude, "...HourOffset [date] tz---lat---lon" and the
+# AstroChartUtil sidereal time (#48) (app log) give the site too; other
+# "a---b" pairs are RA/Dec
 _LK_LOC_MISC = re.compile(r'deg (?:rise|down|sunrise|sunset) time -?\d|\bm(?:Hours|Minutes|Seconds)=\d'
                           r'|-=----?\d|(?<![A-Za-z])(?:alt|mslAlt)=-?\d'
-                          r'|TimeZoneHourOffset \[[^\]]*\]\s+[-\d.]+---\s*-?\d+\.\d\d')
+                          r'|TimeZoneHourOffset \[[^\]]*\]\s+[-\d.]+---\s*-?\d+\.\d\d'
+                          r'|curTimestamp:-*[\d:.]+-{3,}\s*-?\d')
 # meridian flip hour angle (#50), any spelling of "meridian RA/offset/hour...: <number>"
 _LK_MERIDIAN = re.compile(r'(?<![A-Za-z])meridian (?:RA|offset|hour)[^:\n]{0,12}:\s*[-+]?\.?\d', re.I)
 _LK_INDI = re.compile(r'--> (Number|Text)#?\d*:\s*name = (\w+),.*?(?:value|text) = ([^\s,]*)')
@@ -769,6 +778,7 @@ _LK_HINTS = tuple((re.compile(p), lc) for p, lc in (
     (r'l(?:at|on)', True),                                      # location
     (r' time -?\d', False), (r'm(?:Hours|Minutes|Seconds)=', False), (r'alt=', True),
     (r'TimeZoneHourOffset', False), (r'-=---', False), (r'meridian ', True),
+    (r'curTimestamp:', False),
     (r'name = \w*(?:LAT|LONG|ALT|AZ|LST|ELEV|JD|SYNCTIME|UTC|OFFSET),[^\n]*?'
      r'(?:value|text) = (?!<REDACTED>)', False),
     (r's(?:sid|erial)', True), (r'wi-?fi', True), (r'p(?:ass|sk|wd)', True),

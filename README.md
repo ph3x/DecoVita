@@ -94,8 +94,8 @@ what was redacted.
   altitude/azimuth, sidereal time, the meridian flip hour angle, elevation and UTC
   time are removed, because the site could be reconstructed from them very precisely.
 - **Location (app log):** latitude and longitude are rounded to 0.1°. The GPS
-  altitude and the computed twilight, sunrise and sunset times are removed, because
-  together with the date they give away the site.
+  altitude, the computed twilight, sunrise and sunset times and the sidereal time of
+  the sky chart are removed, because together with the date they give away the site.
 - **Location (GuideLog):** unchanged. The header only contains the location at
   roughly 10 km precision.
 - **Serial numbers:** camera serial number, owner, artist and copyright fields.
