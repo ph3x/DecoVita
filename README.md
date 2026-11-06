@@ -91,8 +91,8 @@ what was redacted.
   the app log). Numbering follows the order of first appearance. The mapping is
   kept in memory only and never saved or shown.
 - **Location (DebugLog):** latitude and longitude are rounded to 0.1°. Mount
-  altitude/azimuth, sidereal time, elevation and UTC time are removed, because the
-  site could be reconstructed from them very precisely.
+  altitude/azimuth, sidereal time, the meridian flip hour angle, elevation and UTC
+  time are removed, because the site could be reconstructed from them very precisely.
 - **Location (app log):** latitude and longitude are rounded to 0.1°. The GPS
   altitude and the computed twilight, sunrise and sunset times are removed, because
   together with the date they give away the site.

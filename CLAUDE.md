@@ -213,6 +213,11 @@ PHD2-like, but with StellaVita-specific lines:
 - **gphoto config dumps** (no timestamp, decoded by brute force): `Config: /main/…`,
   then field lines `  Label      : `, `  Readonly   : `, `  Type       : `,
   `  Current    : `, `  Choices    : `.
+- **Meridian flip lines** (timestamped): `MeridianFlip::calculateData meridian RA (LST):-1.234567`,
+  followed by `MeridianFlip::flipIfNeeded 0 compare meridian offset:-1.234567` with the
+  same value (6 decimals or `nan`), plus `MeridianFlip::update 0 from (a,b) to (c,d)`
+  (two number pairs, presumably target RA/Dec, not verified; kept),
+  `::start`, `::stop`. See location redaction (#50).
 - **Source paths:** ToupTek's own build paths appear in error lines. These are not
   user data.
 
@@ -319,6 +324,11 @@ for all of them.
   - `*_JD` and `*_SYNCTIME` of the sync/align points
   - `HORIZONLIMITS_POINT_*`
   - `TIME_UTC` (`UTC`, `OFFSET`)
+  - the meridian flip hour angle (#50): `MeridianFlip::calculateData meridian RA
+    (LST):<v>` and `MeridianFlip::flipIfNeeded <n> compare meridian offset:<v>`
+    (same value; `nan` is redacted too). Despite the label it is the local hour
+    angle `LST - RA` (+0/12 h by pier side); with the unredacted RA and the line
+    time it gives the longitude, like `LST`. Leak check: `_LK_MERIDIAN`.
 - **Why so strict:** from the mount's ALT/AZ/LST alone the site can be reconstructed
   to < 1 m in latitude and ~250 m in longitude. Rounding does not help: even at 1°
   the error is only ~2 km, because thousands of samples average out.
@@ -429,7 +439,7 @@ phdlogview ignores these lines. When the tool reads its own output again, it ski
   so a window that waits for input fails the check instead of hanging the suite. The
   test "tkinter without display" is skipped on Windows/macOS: removing `DISPLAY` hides
   nothing there.
-- **Last run:** 418/418 passed on Python 3.14 with Xvfb (2026-10-26); CI results: see the Actions tab.
+- **Last run:** 466/466 passed on Python 3.14 with Xvfb (2026-11-06); CI results: see the Actions tab.
 - **Fixtures:** built in a temp dir from fake plaintext and encrypted with `encode_line`.
   All values are invented (e.g. `FAKE_HOME`/`FAKE_HOME_EXT`, `FAKESERIAL…`,
   `192.168.77.x`).
