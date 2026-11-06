@@ -134,18 +134,23 @@ standardmäßig an; `--no-leak-check` schaltet sie ab.
 
 ## Wie die Logs kodiert sind
 
-Jede Zeile ist einzeln mit einer Zeichenverschiebung über die druckbaren Zeichen
-kodiert. Der Startwert ist pro Zeile zufällig, und die Verschiebung wächst mit der
-Position im Text, fast immer um eins. Aus dem bekannten ersten Zeichen (`[` im
-DebugLog, `2` für Datumszeilen im GuideLog) ergeben sich ein oder zwei mögliche
-Startwerte; der Zeitstempel bestätigt den richtigen. Bei Zeilen ohne Zeitstempel
-probiert das Skript alle 95 Startwerte durch und nimmt den plausibelsten Text.
+Jede Zeile ist mit einer Zeichenverschiebung über die druckbaren Zeichen kodiert.
+Die Verschiebung wächst mit der Position im Text, fast immer um eins, und beginnt
+nicht mit jeder Zeile neu: Der Startwert einer Zeile ergibt sich aus der Zahl der
+Zeichen in allen Zeilen davor. Das Tool zählt beim Lesen mit und kennt so den
+Startwert jeder Zeile im Voraus. Zeilen mit Zeitstempel bestätigen ihn: Aus dem
+bekannten ersten Zeichen (`[` im DebugLog, `2` für Datumszeilen im GuideLog)
+ergeben sich ein oder zwei mögliche Startwerte, der Zeitstempel bestätigt den
+richtigen. Passt ein Zeitstempel nicht zur Zählung (ein fehlendes oder
+beschädigtes Stück der Datei), folgt das Tool dem Zeitstempel und warnt
+("Schlüsselzähler neu synchronisiert"). Nur vor der ersten Zeile mit Zeitstempel
+einer Datei probiert es alle 95 Startwerte durch und nimmt den plausibelsten Text.
 Leerzeichen und `~` werden gleich kodiert und sind danach nicht unterscheidbar.
 
-Die Logs der Handy-App nutzen dasselbe Verfahren mit zwei Unterschieden:
-Nicht-ASCII-Zeichen (z. B. chinesische Texte oder `℃`) bleiben unverändert und
-zählen nicht als Position, und der Text ist doppelt UTF-8-kodiert. Das Tool macht
-beides rückgängig.
+Tabulatoren, NUL-Bytes und Nicht-ASCII-Zeichen (z. B. chinesische Texte oder `℃`
+in den Logs der Handy-App) bleiben unverändert und zählen nicht als Position. Der
+Text der App-Logs ist außerdem doppelt UTF-8-kodiert; das Tool macht das
+rückgängig.
 
 Das Verfahren wurde allein aus den Logdateien abgeleitet. Es gibt dazu keine
 Dokumentation von ToupTek.
@@ -157,8 +162,12 @@ Zeichensalat erzeugen, und in Zeichensalat findet die Schwärzung keine
 persönlichen Daten. Dagegen gibt es zwei Prüfungen:
 
 - **Decodier-Sicherheit:** der Anteil der nicht leeren Zeilen einer Datei, die
-  sicher entschlüsselt wurden (ein Zeitstempel hat den Startwert bestätigt, oder
-  ein Startwert war klar der plausibelste). Er steht pro Datei in der Ausgabe
+  sicher entschlüsselt wurden (ein Zeitstempel hat den Startwert bestätigt; oder
+  die Zeichenzählung hat ihn geliefert und der nächste Zeitstempel die Zählung
+  bestätigt; oder vor dem ersten Zeitstempel war ein Startwert klar der
+  plausibelste). Zeilen vor einer
+  Neusynchronisierung und Zeilen nach dem letzten Zeitstempel einer Datei zählen
+  als unsicher. Er steht pro Datei in der Ausgabe
   (`Decodier-Sicherheit 100.0 %`) und in der Übersichtstabelle, Spalte `sicher`
   (`-` = nicht entschlüsselt, z. B. `.glog` oder eine schon entschlüsselte
   Datei). Alle bisherigen echten Logs erreichen 100.0 %. Unter 95 % wird der
@@ -177,8 +186,6 @@ persönlichen Daten. Dagegen gibt es zwei Prüfungen:
 ## Bekannte Grenzen
 
 - Leerzeichen und `~` sind nicht unterscheidbar (siehe oben).
-- Zeilen, die nur aus Ziffern bestehen, können mehrdeutig sein. Die Statistik zählt
-  solche Zeilen als "unsicher"; das senkt die Decodier-Sicherheit etwas.
 - phdlogview interpoliert die Zeitachse aus den Bildnummern. Ändert sich die
   Bildrate, sind die Zeitbeschriftungen irreführend; beim Überfahren mit der Maus
   wird die echte Zeit angezeigt.

@@ -90,8 +90,14 @@ Windows PowerShell, macOS `screencapture`), uploaded as run artifacts.
 ## Architecture of `decovita.py`
 
 - **Cipher core:** `decode_line`, `encode_line` (inverse, used for test vectors),
-  `decode_app_line`/`encode_app_line` (phone app variant),
-  `t0_candidates`, `try_known`, `recover`, `train_model`, `_score`.
+  `decode_app_line`/`encode_app_line` (phone app variant), `steps` (key positions
+  of a raw line), `t0_candidates`, `anchor`/`try_known`, `recover` (per-line
+  search), `prescan`/`_prescan` (model + start value), `train_model`, `_score`.
+- **Key counter (#47):** `Decoder(dec, mdl, start)` streams a file line by line
+  with the predicted key; statistics `anchored`, `predicted`, `guessed`,
+  `uncertain`, `resyncs`; `finish()` at the end of the file. `_decoder_stats`
+  copies them into `res` (`res["resyncs"]`, warning `resync` above
+  `RESYNC_WARN = 0`).
 - **File type detection:** `sniff(path)` -> (`guide`|`debug`|`glog`|`app`|`unknown`,
   already_plain).
 - **DebugLog dates:** `DebugDater` adds a full date from the filename and handles
@@ -109,8 +115,10 @@ Windows PowerShell, macOS `screencapture`), uploaded as run artifacts.
   stores `res["leaks"]` (`None` = not checked); `_log_done` prints category, count
   and line numbers, never values; table column `Leaks`/`Reste`.
 - **Decode confidence (#7):** `_confidence(res, filled, plain)` -> `res["confidence"]` =
-  share (percent, rounded down to 0.1) of non-empty lines that are anchored or guessed
-  with margin >= `UNCERTAIN_MARGIN`; `None` if not decoded (glog, plain input). Below
+  share (percent, rounded down to 0.1) of non-empty lines that are anchored, predicted
+  by the key counter and confirmed by the next anchor (#47), or guessed with margin
+  >= `UNCERTAIN_MARGIN`; `None` if not decoded (glog, plain input). Predicted lines
+  before a resync or after the last anchor count as uncertain. Below
   `CONFIDENCE_WARN = 95` (and >= `CONFIDENCE_MIN_LINES = 20` lines) -> warning
   `low_confidence`. Measured 2026-10-26: 100.0 on all real logs; a simulated cipher
   change (reversed/shifted lines) 12-27. A totally changed cipher makes `sniff` return
@@ -118,7 +126,11 @@ Windows PowerShell, macOS `screencapture`), uploaded as run artifacts.
   table state `format changed?`. Table column `Conf`/`sicher`, `!` below the threshold.
 - **Selftest (#9):** `_SELFTEST` = fictitious sample lines (DebugLog, gphoto line without
   timestamp, GuideLog, app incl. non-ASCII and AstroChartUtil #48) with **fixed** cipher bytes, expected
-  plain/redacted text and leak-check categories. `selftest()` -> (checks, failed names);
+  plain/redacted text and leak-check categories. `_SELFTEST_SEQ` (#47) = two short
+  sequences encrypted with the key counter (DebugLog with `=` separator, customfuncex
+  `Current` and digit line; app with tab-indented, non-ASCII and NUL lines and a start
+  value other than 33), checked for exact decoding, no resync, and one resync when a
+  line is dropped. `selftest()` -> (checks, failed names);
   `selftest_ok(lang, log)` runs silently before every CLI/menu/GUI run and stops the
   run (exit 2) on failure; `--selftest` runs it alone (exit 0/1). A constant key
   shift in the decoder is healed by the brute force, so mutation tests must break
@@ -138,29 +150,46 @@ Windows PowerShell, macOS `screencapture`), uploaded as run artifacts.
 
 ## Log encryption (reverse-engineered from the files, no documentation)
 
-Each line is encoded on its own. Only bytes 33..126 occur, and line endings are LF.
+Each line is decoded on its own, but the key runs on over the whole file.
+Device logs contain only bytes 33..126, and line endings are LF.
 
 ```
-t_j   = (t0 + j) mod 95            # j = position in line, t0 random per line
+t_j   = (t0 + j) mod 95            # j = position in line (bytes 32..126 only)
 a_j   = t_j - 1 if t_j > 32 else t_j
 plain = 33 + (cipher - 33 - a_j) mod 94      # 126 -> space
+t0    = (start + raw bytes 32..126 in all previous lines) mod 95     # (#47)
 ```
+
+- **Key counter (#47, verified 2026-11-06 on all real logs, counts only):** the
+  predicted `t0` equals the anchored one on 100 % of the timestamped lines of every
+  file. `start` is 33 in all real logs but one app log, so it is derived per file from
+  the first anchored line (`prescan`, within the first `_TRAIN_LINES` lines). Tab, NUL,
+  CR, LF and bytes >= 0x80 never advance the counter, not even inside a line
+  (with this rule 100 % of the tab-indented app lines match, counting the tab 0 %).
+  `Decoder` decodes every line with the predicted key; a timestamp confirms it. If an
+  anchor disagrees, the anchor wins and the counter is resynced (warning `resync`):
+  that only happens in damaged, truncated or concatenated files (0 resyncs on all
+  real logs). Without an anchor yet (start unknown), `recover` is the fallback.
 
 - **Space/`~` collision:** 95 plaintext symbols map onto 94 cipher symbols, so `~`
   decodes as a space. This cannot be fixed.
 - **Recovering t0:** the first character is known for timestamped lines (`[` in the
   DebugLog, `2` for date lines in the GuideLog). `t0_candidates(c0, first)` gives
   1–2 candidates; `TS` regex confirms.
-- **Lines without a timestamp:** the tool brute-forces all 95 keys and keeps the
-  best-scoring candidate. Scoring = bigram log-probabilities + common-character
-  bonus + known-vocabulary bonus.
+- **Lines without a timestamp:** decoded with the counter key. Only before the first
+  anchor of a file (start unknown) does the tool brute-force all 95 keys and keep the
+  best-scoring candidate (`recover`). Scoring = bigram log-probabilities +
+  common-character bonus + known-vocabulary bonus.
 - **The scoring model:** a seed corpus plus bigrams from the first 20,000 anchored
   lines of the same file (`train_model`). The seed alone was not enough: it
   mis-decoded 66 camera-config lines in the real DebugLog.
-- **Uncertain lines:** if the score gap to the runner-up is below
-  `UNCERTAIN_MARGIN = 25`, the line counts as "uncertain" in the statistics.
-  Digit-only lines (e.g. `1111111100000000…`) are inherently ambiguous, because
-  another key yields a shifted digit string.
+- **Uncertain lines:** a brute-forced line whose score gap to the runner-up is below
+  `UNCERTAIN_MARGIN = 25`, and predicted lines before a resync or after the last
+  anchor. The margin alone is not a reliable measure: on the real DebugLogs the brute
+  force got 13 lines wrong with margins of 42-122 (`=` separator lines decoded as
+  digits, `Current` lines of a `/main/settings/customfuncex` block decoded as
+  garbage); the counter decodes them, and digit-only lines such as
+  `1111111100000000…`, correctly.
 - **Speed:** precomputed per-position tables plus `bytes(map(operator.getitem, pos, raw))`.
   The 231 MB real DebugLog decodes in about 14 s; a full run with redaction and
   dates takes about 34 s.
@@ -233,8 +262,8 @@ cipher, but:
 - **Double-encoded UTF-8:** the raw bytes are valid UTF-8 of characters U+0080..U+00FF;
   after decoding, `bytes.decode("utf-8").encode("latin1").decode("utf-8")`.
 - Lines: `YYYY-MM-DD hh:mm:ss | <Tag> ...` (anchored by `TS`). Lines without timestamp
-  are tab-indented stack traces and version blocks (`TP version:…`); the leading tab
-  is a constant shift, so brute force handles them. No date handling needed.
+  are tab-indented stack traces and version blocks (`TP version:…`); the tab does not
+  advance the key (#47), so they decode with the counter key. No date handling needed.
 - One line can contain NUL bytes (`Bridge IP: \0\0…`); they pass through.
 - Personal data and formats (all covered by `Redactor._do_app`, active only for
   `app`): JSON SSIDs/passwords (existing rules); free-text SSIDs `ssid=`,
@@ -443,15 +472,17 @@ phdlogview ignores these lines. When the tool reads its own output again, it ski
   category, redaction in doubt, category switches, output header, GuideLog location
   kept, dates/rollover, PHD2 conversion, files, dry run, version check, CLI,
   progress/i18n, decode confidence and format-change warning, selftest (with broken
-  decoder/redactor/leak-check counter-checks), text menu (incl. tkinter-without-display), GUI under Xvfb or on the
+  decoder/redactor/leak-check/key-counter counter-checks), key counter (#47: start
+  value, tab/NUL, lost/inserted line, end of file, no anchor), text menu (incl. tkinter-without-display), GUI under Xvfb or on the
   native desktop (Windows/macOS).
 - **Portability:** every subprocess goes through `run()`: UTF-8 pipes on every platform
   (Windows with Python <= 3.14 defaults to cp1252 and breaks on `℃`) and a timeout,
   so a window that waits for input fails the check instead of hanging the suite. The
   test "tkinter without display" is skipped on Windows/macOS: removing `DISPLAY` hides
   nothing there.
-- **Last run:** 480/480 passed on Python 3.14 with Xvfb (2026-11-06); CI results: see the Actions tab.
-- **Fixtures:** built in a temp dir from fake plaintext and encrypted with `encode_line`.
+- **Last run:** 502/502 passed on Python 3.14 with Xvfb (2026-11-06); CI results: see the Actions tab.
+- **Fixtures:** built in a temp dir from fake plaintext and encrypted with `encode_line`
+  via `encrypt_seq` (running key counter like the device, #47).
   All values are invented (e.g. `FAKE_HOME`/`FAKE_HOME_EXT`, `FAKESERIAL…`,
   `192.168.77.x`).
 ## Open items / ToDo
@@ -477,5 +508,5 @@ Decisions and background (not tasks) stay here:
   with `SPDX-FileCopyrightText` and `SPDX-License-Identifier` lines. Reason: the test
   suite's `phdlogview_parse` is a port of GPLv3 code (phdlogview `logparser.cpp`),
   so GPL keeps everything consistent without a rewrite.
-- **Known limits:** the space/`~` collision, ambiguous digit-only lines, and
+- **Known limits:** the space/`~` collision, and
   phdlogview's interpolated time axis.

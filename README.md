@@ -129,17 +129,22 @@ The summary table shows the number of flagged lines per file in the column
 
 ## How the logs are encoded
 
-Each line is encoded on its own with a character shift over the printable
-characters. The start value is random per line, and the shift grows with the
-position in the text, almost always by one. The known first character (`[` in the
-DebugLog, `2` for date lines in the GuideLog) gives one or two possible start
-values; the timestamp confirms the right one. For lines without a timestamp the
-script tries all 95 start values and keeps the most plausible text. Space and `~`
-are encoded the same way and cannot be told apart afterwards.
+Each line is encoded with a character shift over the printable characters. The
+shift grows with the position in the text, almost always by one, and it does not
+start again with each line: the start value of a line follows from the number of
+characters in all lines before it. The tool keeps this count while reading and so
+knows the start value of every line in advance. Timestamped lines confirm it: the
+known first character (`[` in the DebugLog, `2` for date lines in the GuideLog)
+gives one or two possible start values, and the timestamp confirms the right one.
+If a timestamp does not match the count (a missing or damaged piece of the file),
+the tool follows the timestamp and warns ("key counter resynced"). Only before the
+first timestamped line of a file does it try all 95 start values and keep the most
+plausible text. Space and `~` are encoded the same way and cannot be told apart
+afterwards.
 
-The phone app logs use the same scheme with two differences: non-ASCII characters
-(for example Chinese texts or `℃`) are left as they are and do not count as a
-position, and the text is UTF-8-encoded twice. The tool undoes both.
+Tabs, NUL bytes and non-ASCII characters (for example Chinese texts or `℃` in
+the phone app logs) are left as they are and do not count as a position. The text
+of the phone app logs is also UTF-8-encoded twice; the tool undoes that.
 
 The scheme was derived from the log files alone. There is no documentation of it
 from ToupTek.
@@ -151,8 +156,10 @@ garbage, and the redaction cannot find personal data in garbage. Two checks guar
 against this:
 
 - **Decode confidence:** the share of non-empty lines of a file that decoded
-  with certainty (a timestamp confirmed the start value, or one start value was
-  clearly the most plausible). It is shown per file (`decode confidence 100.0%`)
+  with certainty (a timestamp confirmed the start value; or the character count
+  gave it and the next timestamp confirmed the count; or, before the first
+  timestamp, one start value was clearly the most plausible). Lines before a resync and lines after the last
+  timestamp of a file count as uncertain. It is shown per file (`decode confidence 100.0%`)
   and in the summary table, column `Conf` (`-` = not decoded, e.g. `.glog` or
   an already decoded file). All real logs so far reach 100.0%. Below 95% the
   value is marked with `!` and a warning says that the format has probably
@@ -168,8 +175,6 @@ against this:
 ## Known limits
 
 - Space and `~` cannot be distinguished (see above).
-- Lines consisting only of digits can be ambiguous. The statistics count such lines
-  as "uncertain", which lowers the decode confidence slightly.
 - phdlogview interpolates its time axis from the frame numbers. When the frame rate
   changes, the time labels are misleading; hovering shows the true time.
 
