@@ -93,8 +93,9 @@ Schwärzung.
   Auftretens. Die Zuordnung liegt nur im Speicher und wird nie gespeichert oder
   angezeigt.
 - **Standort (DebugLog):** Breite und Länge werden auf 0,1° gerundet. Höhe und
-  Azimut der Montierung, Sternzeit, Höhe über dem Meer und UTC-Zeit werden entfernt,
-  weil sich daraus der Standort sehr genau zurückrechnen ließe.
+  Azimut der Montierung, Sternzeit, der Stundenwinkel des Meridian-Flips, Höhe über
+  dem Meer und UTC-Zeit werden entfernt, weil sich daraus der Standort sehr genau
+  zurückrechnen ließe.
 - **Standort (App-Log):** Breite und Länge werden auf 0,1° gerundet. Die GPS-Höhe
   und die berechneten Dämmerungs-, Sonnenauf- und -untergangszeiten werden entfernt,
   weil sie zusammen mit dem Datum den Standort verraten.

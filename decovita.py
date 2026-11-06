@@ -383,6 +383,9 @@ _RE_IP_INFO = re.compile(r'(\bip:\s*)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})'
 _RE_NUM = re.compile(r'(--> Number#?\d*:\s*name = )([A-Z_0-9]+)(,.*?value = )(-?[\d.]+(?:[eE][-+]?\d+)?)')
 _RE_TXT = re.compile(r'(--> Text#?\d*:\s*name = )(UTC|OFFSET)(,.*?text = )(\S+)')
 _RE_LATLON_JSON = re.compile(r'("(?:latitude|longitude)"\s*:\s*)(-?\d+(?:\.\d+)?)', re.I)
+# meridian flip hour angle (#50): with the unredacted mount RA and the line
+# time it gives the longitude, like the INDI LST
+_RE_MERIDIAN = re.compile(r'(MeridianFlip::\w+\b[^:\n]*?(?:meridian RA \(LST\)|meridian offset)\s*:\s*)(\S+)')
 _RE_SERIAL_JSON = re.compile(r'("(?:[a-z0-9_]*serial[a-z0-9_]*)"\s*:\s*")([^"]*)(")', re.I)
 _RE_SERIAL_JSON_NUM = re.compile(r'("(?:[a-z0-9_]*serial[a-z0-9_]*)"\s*:\s*)(\d+)', re.I)
 _RE_CONFIG = re.compile(r'^Config:\s*(\S+)')
@@ -563,8 +566,14 @@ class Redactor:
         def ll(m):
             self.counts["location"] += 1
             return m.group(1) + _round1(m.group(2))
+
+        def txt2(m):
+            self.counts["location"] += 1
+            return m.group(1) + REDACTED
         if "latitude" in line or "longitude" in line:
             line = _RE_LATLON_JSON.sub(ll, line)
+        if "MeridianFlip::" in line:
+            line = _RE_MERIDIAN.sub(txt2, line)
         return line
 
     def _do_serial(self, line):
@@ -677,7 +686,7 @@ class Redactor:
                                   or "serial" in low):
             line = self._do_serial(line)
         if self.en["location"] and ("name = " in line or "latitude" in low
-                                    or "longitude" in low):
+                                    or "longitude" in low or "MeridianFlip::" in line):
             line = self._do_location(line)
         if self.en["network"] and ("ipv4:" in low or '"ip' in low or '_ip"' in low
                                    or "gateway" in low or "ip:" in low):
@@ -736,6 +745,8 @@ _LK_LATLON = re.compile(r'(?<![A-Za-z])(?:lat|lon|long|latitude|longitude)(?![A-
 _LK_LOC_MISC = re.compile(r'deg (?:rise|down|sunrise|sunset) time -?\d|\bm(?:Hours|Minutes|Seconds)=\d'
                           r'|-=----?\d|(?<![A-Za-z])(?:alt|mslAlt)=-?\d'
                           r'|TimeZoneHourOffset \[[^\]]*\]\s+[-\d.]+---\s*-?\d+\.\d\d')
+# meridian flip hour angle (#50), any spelling of "meridian RA/offset/hour...: <number>"
+_LK_MERIDIAN = re.compile(r'(?<![A-Za-z])meridian (?:RA|offset|hour)[^:\n]{0,12}:\s*[-+]?\.?\d', re.I)
 _LK_INDI = re.compile(r'--> (Number|Text)#?\d*:\s*name = (\w+),.*?(?:value|text) = ([^\s,]*)')
 _LK_INDI_LOC = re.compile(r'(?:^|_)(?:LAT|LONG|ALT|AZ|LST|ELEV|JD|SYNCTIME|UTC|OFFSET)$')
 _LK_SSID = re.compile(r'(?<![A-Za-z])(?:[a-z_]*(?<!b)ssid|(?:last)?wifi ?name|curwifi|curboxwifi|wi-fi name'
@@ -757,7 +768,7 @@ _LK_HINTS = tuple((re.compile(p), lc) for p, lc in (
     (r':[0-9a-f]{2}:[0-9a-f]{2}:', True), (r'-[0-9a-f]{2}-[0-9a-f]{2}-', True),  # MAC
     (r'l(?:at|on)', True),                                      # location
     (r' time -?\d', False), (r'm(?:Hours|Minutes|Seconds)=', False), (r'alt=', True),
-    (r'TimeZoneHourOffset', False), (r'-=---', False),
+    (r'TimeZoneHourOffset', False), (r'-=---', False), (r'meridian ', True),
     (r'name = \w*(?:LAT|LONG|ALT|AZ|LST|ELEV|JD|SYNCTIME|UTC|OFFSET),[^\n]*?'
      r'(?:value|text) = (?!<REDACTED>)', False),
     (r's(?:sid|erial)', True), (r'wi-?fi', True), (r'p(?:ass|sk|wd)', True),
@@ -806,6 +817,8 @@ def _leak_cats(line, state):
     # location: lat/lon with 2+ decimals (1 decimal is the redacted precision),
     # INDI site/time values that are not <REDACTED>
     if (("lat" in low or "lon" in low) and _LK_LATLON.search(line)) or _LK_LOC_MISC.search(line):
+        found.add("location")
+    if "meridian " in low and _LK_MERIDIAN.search(line):
         found.add("location")
     if "--> " in line:
         m = _LK_INDI.search(line)

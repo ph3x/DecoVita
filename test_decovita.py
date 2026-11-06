@@ -132,6 +132,7 @@ FAKE = {
     "lat_indi": "12.345678", "lon_indi": "336.543210", "elev": "345.000000",
     "alt": "42.123456", "az": "123.654321", "lst": "19.876543",
     "utc": "2026-01-15T19:15:01", "spa_alt": "12.300000",
+    "ha_neg": "-1.234567", "ha_pos": "2.345678",     # meridian flip hour angle (#50)
 }
 
 
@@ -283,6 +284,10 @@ def debug_plain():
     a("[20:15:01.017] --> Number#0: name = SYNCPOLARALIGN_ALT, label = Mount Alt, value = %s, min = 0.000000, max = 90.000000, step = 0.000000" % F["spa_alt"])
     a("[20:15:01.019] -> Switch (CONNECTION_MODE)(RW)")
     a("[20:15:01.020] --> Switch#0: name = CONNECTION_SERIAL, label = Serial, state = on")
+    for i, v in enumerate((F["ha_neg"], F["ha_pos"], "nan")):
+        a("[20:15:01.%03d] MeridianFlip::calculateData meridian RA (LST):%s" % (21 + 2 * i, v))
+        a("[20:15:01.%03d] MeridianFlip::flipIfNeeded 0 compare meridian offset:%s" % (22 + 2 * i, v))
+    a("[20:15:01.027] MeridianFlip::update 0 from (1.330000,58.300000) to (1.330000,58.300000)")
     a("[20:15:02.000] [gphoto] dumping config")
     for path, label, cur in (("/main/settings/ownername", "Owner Name", ""),
                              ("/main/settings/artist", "Artist", F["artist"]),
@@ -642,6 +647,49 @@ def t_redact(fx, tmp):
           "name = CONNECTION_SERIAL, label = Serial, state = on" in txt)
     check("Counter per category > 0", all(r["redactions"][c] > 0 for c in sv.CATEGORIES),
           str(r["redactions"]))
+
+
+def t_meridian(fx, tmp):
+    """#50: the meridian flip hour angle gives the longitude (with RA and time)."""
+    print("\n[4b] Meridian flip hour angle (#50)")
+    F = FAKE
+    r, txt = _debug_out(fx, tmp, "o_mf", sv.CATEGORIES)
+    for k in ("ha_neg", "ha_pos"):
+        check("Meridian: value %s gone" % k, F[k] not in txt)
+    check("Meridian: calculateData value -> <REDACTED> (3 lines incl. nan)",
+          txt.count("MeridianFlip::calculateData meridian RA (LST):<REDACTED>") == 3)
+    check("Meridian: flipIfNeeded offset -> <REDACTED> (3 lines incl. nan)",
+          txt.count("MeridianFlip::flipIfNeeded 0 compare meridian offset:<REDACTED>") == 3)
+    check("Meridian: update line (RA/Dec) kept",
+          "MeridianFlip::update 0 from (1.330000,58.300000) to (1.330000,58.300000)" in txt)
+    check("Meridian: 6 more location redactions than without the rule",
+          r["redactions"]["location"] == _loc_count_without_meridian(fx, tmp) + 6,
+          str(r["redactions"]))
+    hits = sv.check_leaks(r["outputs"][0])
+    check("Meridian: leak check clean on redacted output", hits == {}, str(hits))
+    r_off, txt_off = _debug_out(fx, tmp, "o_mf_off", ("hotspot", "network", "serial"))
+    check("Meridian: --no-redact-location keeps the values",
+          all(F[k] in txt_off for k in ("ha_neg", "ha_pos")))
+    with open(r_off["outputs"][0], encoding="utf-8") as f:
+        lines = f.read().split("\n")
+    want = [n for n, ln in enumerate(lines, 1) if "MeridianFlip::" in ln
+            and any(F[k] in ln for k in ("ha_neg", "ha_pos"))]
+    got = sv.check_leaks(r_off["outputs"][0], ("location",)).get("location", [])
+    check("Meridian: leak check flags exactly the 4 value lines without location redaction",
+          len(want) == 4 and [n for n in got if "MeridianFlip::" in lines[n - 1]] == want,
+          "%s / %s" % (got, want))
+
+
+def _loc_count_without_meridian(fx, tmp):
+    old = sv._RE_MERIDIAN
+    sv._RE_MERIDIAN = re.compile(r'(?!x)x()()')
+    try:
+        out = os.path.join(tmp, "o_mf_base")
+        os.makedirs(out, exist_ok=True)
+        return sv.process_file(fx["debug"], out_dir=out, enabled=sv.CATEGORIES, force=True,
+                               log=quiet)["redactions"]["location"]
+    finally:
+        sv._RE_MERIDIAN = old
 
 
 def t_redact_doubt():
@@ -1554,6 +1602,8 @@ LEAK_LINES = [
     ("location", "2026-01-15 20:15:05 | BrokenLineView drawTwilightBackgroundutcTimeZoneHourOffset [2026, 1, 15, 20, 15, 30]   1.0---12.3456789---23.5"),
     ("location", "2026-01-15 20:15:05 | bestLocation Location[gps 12******,23****** hAcc=12.345 et=+1d2h3m4s567ms alt=345.67890123 vAcc=1.5 mslAlt=<REDACTED>]"),
     ("location", "2026-01-15 20:15:06 | Update longitude and latitude: 23.4567891,12.3"),
+    ("location", "[20:15:01.021] MeridianFlip::calculateData meridian RA (LST):-1.234567"),
+    ("location", "[20:15:01.022] MeridianFlip::flipIfNeeded 0 compare meridian offset:2.345678"),
     ("hotspot", '[20:15:00.200] [CoreServer][RES] {"id":1,"code":0,"CMD_GLOBAL_GET_WIFI":{"ssid":"FAKE_HOME","password":"<REDACTED>"}}'),
     ("hotspot", '[20:15:00.300] [CoreServer][RES] {"id":2,"code":0,"CMD_GLOBAL_GET_NETWORK":{"wifi_ssid":"<SSID_1>","wifi_password":"FAKE-PASS-ONE"}}'),
     ("hotspot", "2026-01-15 20:15:07 | RecordWifiTrace wifi connected ssid=FAKE_CAFE_NET, bssid=<MAC_1>, previousBssid=<MAC_1>, frequency=2412"),
@@ -1599,6 +1649,11 @@ LEAK_CLEAN = [
     "[20:15:00.950] [Focuser] list \"FocuserProd\",\"Gemini EAF\",\"DeepSkyDad AF3\",\"DeepSkyDad AF2\"",
     "RA = 1.33 hr, Dec = 58.3 deg, LST = 19.87 hr, Pier side = West, Alt = 42.92 deg, Az = 45.17 deg",
     '2026-01-15 20:15:15 | 相机温度替换后：-5.0℃',
+    "[20:15:01.021] MeridianFlip::calculateData meridian RA (LST):<REDACTED>",
+    "[20:15:01.022] MeridianFlip::flipIfNeeded 0 compare meridian offset:<REDACTED>",
+    "[20:15:01.025] MeridianFlip::calculateData meridian RA (LST):nan",
+    "[20:15:01.027] MeridianFlip::update 0 from (1.330000,58.300000) to (1.330000,58.300000)",
+    "2026-01-15 20:15:16 | MountFragment setMountMeridianFliptrue",
 ]
 
 
@@ -1999,6 +2054,7 @@ def main():
         t_sniff(fx)
         t_decode_exact(fx, tmp)
         t_redact(fx, tmp)
+        t_meridian(fx, tmp)
         t_redact_doubt()
         t_toggles(fx, tmp)
         t_header(fx, tmp)
