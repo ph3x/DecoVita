@@ -865,6 +865,88 @@ def t_phd2(fx, tmp):
     check("--no-phd2: no PHD2 file", not any(p.endswith("_phd2.txt") for p in r["outputs"]))
 
 
+def _cal_abort_log(abort, heading=True):
+    """GuideLog (decoded text) for #51: aborted calibration, a second complete
+    calibration, one guiding session. Exact real line format, invented values."""
+    L = ["Log begin at 2026-01-15_201500", "Platform: RaspberryPi",
+         "Version: 2.0.37", "Version protocol: 2"]
+    a = L.append
+    hdr = ["Pixel scale = 5.95 arc-sec/px, Binning = 1, Focal length = 130 mm",
+           "Mount = Test Mount, Calibration Step = 2500 ms, Calibration Distance = 25 px"]
+
+    def cal(t, steps):
+        a("2026-01-15 20:%s:00: Calibration Begins" % t)
+        L.extend(hdr)
+        if heading or steps == 2:
+            a("Direction,Step,dx,dy,x,y,Dist")
+        for i in range(steps if heading or steps == 2 else 0):
+            a("2026-01-15 20:%s:%02d: Calibration Step-> Direction-West, StepNum-%d, "
+              "DX-%.3f, DY-0.100, X-%.3f, Y-430.000, Dist-%.3f"
+              % (t, 1 + 4 * i, i, -1.5 * i, 492.0 - 1.5 * i, 1.5 * i))
+    cal("16", 3)
+    if abort == "failed":
+        a("2026-01-15 20:16:20: Calibration Failed")
+    elif abort == "stopped":
+        a("Calibration manually stopped")
+    else:                                    # both events in a row
+        a("2026-01-15 20:16:20: Calibration Failed")
+        a("Calibration manually stopped")
+    cal("20", 2)
+    a("2026-01-15 20:20:30: Calibration Direct Complete")
+    a("West calibration complete. Angle = -179.7 deg, Rate = 0.632 px/sec, Parity = Even")
+    a("2026-01-15 20:20:31: Calibration Complete")
+    a("Calibration complete, mount = Test Mount")
+    a("")
+    a("2026-01-15 20:25:00: Guiding Begins")
+    a("Frame,Time,mount,dx,dy,RARawDistance,DECRawDistance,RAGuideDistance,DECGuideDistance,"
+      "RADuration,RADirection,DECDuration,DECDirection,XStep,YStep,StarMass,SNR,ErrorCode")
+    for k in range(3):
+        a("2026-01-15 20:25:%02d: Guiding Step-> FrameNum-%d, StepTime-%.3f, \"Mount\", "
+          "CamOffsetX-0.100, CamOffsetY--0.200, MountOffsetX-0.150, MountOffsetY--0.050, "
+          "DistRa-0.120, DistDec--0.060, DurRa-0 (), DurDec-120 (N)   StarMass-12345, "
+          "StarSNR-25.50, StarErr-0" % (5 + 2 * k, k + 1, 5.0 + 2 * k))
+    a("2026-01-15 20:26:00: Guiding Ends")
+    return L
+
+
+def t_phd2_cal_abort():
+    print("\n[10b] PHD2 conversion: stopped / failed calibration (#51)")
+    for abort in ("failed", "stopped", "both"):
+        out = sv.convert_to_phd2(_cal_abort_log(abort))
+        sessions, cals, errors = phdlogview_parse(out)
+        check("%s: phdlogview parser: no errors" % abort, not errors, str(errors[:3]))
+        check("%s: 2 calibrations, 1 session" % abort, len(cals) == 2 and len(sessions) == 1,
+              "%d/%d" % (len(cals), len(sessions)))
+        check("%s: steps belong to their own calibration" % abort,
+              len(cals) == 2 and len(cals[0]["entries"]) == 3 and len(cals[1]["entries"]) == 2,
+              str([len(c["entries"]) for c in cals]))
+        check("%s: second calibration starts at its own time" % abort,
+              len(cals) == 2 and cals[1]["start"] == "2026-01-15 20:20:00")
+        check("%s: session has its 3 steps" % abort,
+              len(sessions) == 1 and len(sessions[0]["entries"]) == 3)
+        note = "Calibration manually stopped" if abort == "stopped" else "Calibration failed"
+        i = out.index(note)
+        check("%s: note line followed by a blank line" % abort, out[i + 1] == "", repr(out[i + 1]))
+        check("%s: only one 'Calibration complete' line" % abort,
+              sum(o.startswith("Calibration complete") for o in out) == 1)
+        # counter-check: without the blank line the next calibration is swallowed
+        broken = out[:i + 1] + out[i + 2:]
+        check("%s: counter-check: without the fix the parser sees 1 calibration" % abort,
+              len(phdlogview_parse(broken)[1]) == 1)
+    out = sv.convert_to_phd2(_cal_abort_log("both"))
+    check("both: 'Calibration failed' closes, 'manually stopped' stays as text",
+          out.count("Calibration failed") == 1 and out.count("Calibration manually stopped") == 1
+          and out[out.index("Calibration failed") + 1] == "")
+    # aborted before the Direction heading: phdlogview ends a section only after it
+    out = sv.convert_to_phd2(_cal_abort_log("failed", heading=False))
+    sessions, cals, errors = phdlogview_parse(out)
+    check("abort before the Direction heading: 2 calibrations, 1 session",
+          len(cals) == 2 and len(sessions) == 1 and not errors,
+          "%d/%d %s" % (len(cals), len(sessions), errors[:3]))
+    check("abort before the Direction heading: second calibration keeps its steps",
+          len(cals) == 2 and len(cals[1]["entries"]) == 2)
+
+
 def t_files(fx, tmp):
     print("\n[11] Files")
     before = {k: sha(fx[k]) for k in ("guide", "debug", "glog")}
@@ -2272,6 +2354,7 @@ def main():
         t_guide_location_kept(fx, tmp)
         t_date(fx, tmp)
         t_phd2(fx, tmp)
+        t_phd2_cal_abort()
         t_files(fx, tmp)
         t_report(fx, tmp)
         t_version(fx, tmp)
