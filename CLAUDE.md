@@ -204,7 +204,9 @@ PHD2-like, but with StellaVita-specific lines:
   `Version: 2.0.37`, `Version protocol: 2`.
 - **Event lines:** `YYYY-MM-DD HH:MM:SS: Guiding Begins`, `... Calibration Begins`,
   `... Guiding Ends`, `... Settle State Changed`, `... Guiding Dithered`,
-  `... Set Lock Position`, `... Calibration Direct Complete`.
+  `... Set Lock Position`, `... Calibration Direct Complete`, `... Calibration Complete`,
+  `... Calibration Failed`; plus the untimestamped line `Calibration manually stopped`
+  (#51, the last three seen in real logs).
 - **Steps:** `...: Guiding Step-> FrameNum-N, StepTime-S, "Mount", CamOffsetX-…,
   CamOffsetY-…, MountOffsetX-…, MountOffsetY-…, DistRa-…, DistDec-…, DurRa-D (W|E|),
   DurDec-D (N|S|)   StarMass-…, StarSNR-…, StarErr-0`.
@@ -449,6 +451,15 @@ phdlogview ignores these lines. When the tool reads its own output again, it ski
 - **Event lines:** `Guiding Begins at …`, `Calibration Begins at …`,
   `Guiding Ends at …` followed by an empty line. A stray `Guiding Ends` without an
   open session is dropped.
+- **Ending a calibration (#51):** the timestamped `Calibration Complete` is dropped (the
+  PHD2-syntax `Calibration complete, mount = …` line that follows it is copied and
+  closes the section). `Calibration Failed` becomes the note `Calibration failed`,
+  `Calibration manually stopped` is kept; inside an open calibration either one is
+  followed by a blank line, because phdlogview ends a calibration section only at a
+  blank line or `Calibration complete`, and only after the `Direction,Step,…` heading
+  (so the heading is emitted first if the device had not logged it yet). Without
+  this, the next calibration was merged into the aborted one. No PHD2 wording for
+  these events was checked; the note lines are plain text.
 - **Step rows:** `frame,dt,"Mount",dx,dy,RAraw,DECraw,RAguide,DECguide,RAdur,E|W,DECdur,N|S,,,mass,snr,err`
   (`dt` = StepTime).
 - **Drop rows:** `frame,dt,"DROP"` + 12 empty fields + `,mass,snr,err,"<description>"`.

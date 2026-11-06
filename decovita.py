@@ -1029,6 +1029,21 @@ def _wall(ts):
 def convert_to_phd2(lines, stats=None):
     """lines: iterable of decoded GuideLog text lines -> list of PHD2 lines."""
     out, sess, state, ver = [], None, None, {"v": "unknown"}
+    cal_hdr = False
+
+    def end_cal(note):
+        # A stopped or failed calibration (#51): phdlogview ends a calibration
+        # section only at a blank line or 'Calibration complete', and only
+        # after the 'Direction,Step,...' heading. Without this the next
+        # calibration is merged into the aborted one.
+        nonlocal state
+        if state == 'cal':
+            if not cal_hdr:
+                out.append('Direction,Step,dx,dy,x,y,Dist')
+            out.extend([note, ''])
+            state = None
+        else:
+            out.append(note)
 
     def flush():
         nonlocal sess
@@ -1070,8 +1085,10 @@ def convert_to_phd2(lines, stats=None):
                 out.append('Guiding Begins at ' + ts)
             elif ev == 'Calibration Begins':
                 flush()
-                state = 'cal'
+                state, cal_hdr = 'cal', False
                 out.append('Calibration Begins at ' + ts)
+            elif ev == 'Calibration Failed':
+                end_cal('Calibration failed')
             elif ev == 'Guiding Ends':
                 if state == 'guide':
                     flush()
@@ -1121,11 +1138,15 @@ def convert_to_phd2(lines, stats=None):
             pass
         elif ln == '':
             continue
+        elif ln.startswith('Calibration manually stopped') and sess is None:
+            end_cal(ln)
         else:
             if sess is not None and (sess['rows'] or ln.startswith('INFO: ')):
                 sess['rows'].append({'kind': 'text', 'line': ln})
                 continue
             out.append(ln)
+            if ln.startswith('Direction,Step,dx,dy,x,y,Dist'):
+                cal_hdr = True
             if ln.startswith('Calibration complete'):
                 out.append('')
                 state = None
