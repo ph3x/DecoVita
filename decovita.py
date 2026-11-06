@@ -46,7 +46,7 @@ import bisect
 
 TOOL_VERSION = "1.4.1"
 COPYRIGHT = "Copyright (C) 2026 ph3x"
-KNOWN_APP_VERSIONS = ("2.0.37",)      # GuideLog "Version:" values seen so far
+KNOWN_APP_VERSIONS = ("2.0.37", "2.0.38", "2.0.42", "2.0.43")  # GuideLog "Version:" values seen (#49)
 KNOWN_PROTOCOL = ("2",)               # GuideLog "Version protocol:" values
 
 OUT_SUFFIXES = ("_decoded", "_phd2", "_redacted", "_plain")

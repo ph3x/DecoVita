@@ -201,7 +201,7 @@ t0    = (start + raw bytes 32..126 in all previous lines) mod 95     # (#47)
 PHD2-like, but with StellaVita-specific lines:
 
 - **Preamble:** `Log begin at YYYY-MM-DD_HHMMSS`, `Platform: RaspberryPi`,
-  `Version: 2.0.37`, `Version protocol: 2`.
+  `Version: 2.0.37` (also seen: 2.0.38, 2.0.42, 2.0.43, #49), `Version protocol: 2`.
 - **Event lines:** `YYYY-MM-DD HH:MM:SS: Guiding Begins`, `... Calibration Begins`,
   `... Guiding Ends`, `... Settle State Changed`, `... Guiding Dithered`,
   `... Set Lock Position`, `... Calibration Direct Complete`, `... Calibration Complete`,
