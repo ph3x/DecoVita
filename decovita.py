@@ -68,6 +68,7 @@ def _build_tables():
     return tabs
 
 _TAB = _build_tables()
+_NOSTEP = bytes(b for b in range(256) if not 32 <= b <= 126)
 _POS_CACHE = {}          # t0 -> list of tables, extended on demand
 from operator import getitem as _getitem
 
@@ -84,33 +85,53 @@ def _pos(t0, n):
     return lst
 
 
+# Raw bytes that advance the key position (#47): 32..126.  Tab, NUL, CR and
+# bytes >= 0x80 pass through unchanged and do not advance it, neither inside a
+# line nor in the running counter over the whole file.
+_STEP = bytes(range(32, 127))
+
+
+def steps(raw):
+    """Number of key positions a raw line advances (bytes 32..126)."""
+    return len(raw) - len(raw.translate(None, _STEP))
+
+
+def _decode_bytes(raw, t0):
+    if not raw:
+        return b""
+    if len(raw.translate(None, _STEP)):            # bytes that do not advance j
+        it = iter(bytes(map(_getitem, _pos(t0, steps(raw)), raw.translate(None, _NOSTEP))))
+        return bytes(next(it) if 32 <= b <= 126 else b for b in raw)
+    return bytes(map(_getitem, _pos(t0, len(raw)), raw))
+
+
 def decode_line(raw, t0):
     """Decode one raw (bytes) line with line key t0 -> str."""
-    if not raw:
-        return ""
-    pos = _pos(t0, len(raw))
-    return bytes(map(_getitem, pos, raw)).decode("latin1")
+    return _decode_bytes(raw, t0).decode("latin1")
 
 
 def encode_line(text, t0):
     """Inverse of decode_line.  text (str) -> raw (bytes).  For test vectors.
 
     '~' in the plaintext is encoded like a space (the known collision) and will
-    come back as a space when decoded.
+    come back as a space when decoded.  Other characters outside 32..126 are
+    written unchanged and do not advance the key position.
     """
     out = bytearray(len(text))
-    for j, ch in enumerate(text):
+    j = 0
+    for k, ch in enumerate(text):
         pch = ord(ch)
-        t = (t0 + j) % 95
-        a = t - 1 if t > 32 else t
         if pch == 32 or pch == 126:          # space or '~'  -> raw symbol 126
             praw = 126
         elif 33 <= pch <= 125:
             praw = pch
         else:                                # non-printable: leave untouched
-            out[j] = pch & 0xFF
+            out[k] = pch & 0xFF
             continue
-        out[j] = 33 + (praw - 33 + a) % 94
+        t = (t0 + j) % 95
+        a = t - 1 if t > 32 else t
+        out[k] = 33 + (praw - 33 + a) % 94
+        j += 1
     return bytes(out)
 
 
@@ -132,12 +153,9 @@ def _undo_double_utf8(bs):
 
 def decode_app_line(raw, t0):
     """Decode one raw phone-app log line with line key t0 -> str."""
-    if not raw:
-        return ""
     if raw.isascii():
         return decode_line(raw, t0)
-    asc = iter(decode_line(bytes(b for b in raw if b < 0x80), t0).encode("latin1"))
-    return _undo_double_utf8(bytes(next(asc) if b < 0x80 else b for b in raw))
+    return _undo_double_utf8(_decode_bytes(raw, t0))
 
 
 def encode_app_line(text, t0):
@@ -165,18 +183,23 @@ def t0_candidates(c0, first):
     return (s + 1,)
 
 
-def try_known(raw, dec=decode_line):
-    """Fast path: recover a timestamped line from its known first character.
-    dec: decode_line (device logs) or decode_app_line (phone app logs)."""
-    if not raw:
-        return ""
-    c0 = raw[0]
+def anchor(raw, dec=decode_line):
+    """Key of a timestamped line from its known first character -> (text, t0),
+    or None.  dec: decode_line (device logs) or decode_app_line (phone app logs)."""
     for f in (0x5B, 0x32):               # '[' (DebugLog) or '2' (date lines)
-        for t0 in t0_candidates(c0, f):
+        for t0 in t0_candidates(raw[0], f):
             d = dec(raw, t0)
             if TS.match(d):
-                return d
+                return d, t0
     return None
+
+
+def try_known(raw, dec=decode_line):
+    """Fast path: recover a timestamped line from its known first character."""
+    if not raw:
+        return ""
+    a = anchor(raw, dec)
+    return a[0] if a else None
 
 
 # ---- fallback brute-force scoring (lines without a timestamp anchor) --------
@@ -226,18 +249,34 @@ def _build_model(texts):
 _MODEL = _build_model([_SEED])
 
 
-def train_model(path, dec=decode_line):
-    """Seed + bigrams from the first anchored (timestamped) lines of this file.
-    Reads at most _TRAIN_LINES lines; the file is still processed line by line."""
+def _prescan(lines, dec=decode_line):
+    """Raw lines (no line endings) -> (model, start).
+    model: seed + bigrams from the anchored (timestamped) lines.
+    start: key counter at the first line, derived from the first anchored line
+    (#47; usually 33, but not always), None if no line is anchored."""
     sample = []
+    start = None
+    cnt = 0
+    for ln in lines:
+        a = anchor(ln, dec) if ln else None
+        if a:
+            sample.append(a[0])
+            if start is None:
+                start = (a[1] - cnt) % 95
+        cnt += steps(ln)
+    return _build_model(sample + [_SEED]), start
+
+
+def prescan(path, dec=decode_line):
+    """_prescan over the first _TRAIN_LINES lines of a file (one short read
+    before the streaming pass)."""
     with open(path, "rb") as f:
-        for i, ln in enumerate(f):
-            if i >= _TRAIN_LINES:
-                break
-            d = try_known(ln.rstrip(b"\r\n"), dec)
-            if d:
-                sample.append(d)
-    return _build_model(sample + [_SEED])
+        return _prescan((ln.rstrip(b"\r\n") for _, ln in zip(range(_TRAIN_LINES), f)), dec)
+
+
+def train_model(path, dec=decode_line):
+    """Seed + bigrams from the first anchored lines of this file (see prescan)."""
+    return prescan(path, dec)[0]
 
 
 def _score(d, mdl=None):
@@ -263,6 +302,9 @@ UNCERTAIN_MARGIN = 25.0     # score gap below which a guessed line counts as unc
 # far: 100 %.  A changed cipher (simulated on the real logs): 12-27 %.
 CONFIDENCE_WARN = 95.0      # percent; below this a file gets a warning
 CONFIDENCE_MIN_LINES = 20   # fewer non-empty lines: no warning (too few to judge)
+# Key counter resyncs (#47) above this number give a warning.  All real logs so
+# far: 0 (an intact file never needs one).
+RESYNC_WARN = 0
 
 
 def recover(raw, mdl=None, dec=decode_line):
@@ -285,6 +327,62 @@ def recover(raw, mdl=None, dec=decode_line):
             second = s
     margin = (best_s - second) if second is not None else 0.0
     return best, False, margin
+
+
+class Decoder:
+    """Streaming decoder with the running key counter (#47).
+
+    The key of a line is not random: t0 = (start + number of raw bytes 32..126
+    in all previous lines) mod 95.  Each line is decoded with the predicted key;
+    a timestamped line confirms it.  If the anchor disagrees, the anchor wins and
+    the counter is resynced (counted in `resyncs`); the predicted lines since
+    the last confirmation then count as uncertain, and so do those still open
+    at the end (finish(); a changed cipher leaves no anchor to confirm them).
+    Without a prediction (no anchor seen yet) the per-line search of recover()
+    is the fallback.  Statistics: anchored, predicted, guessed lines;
+    uncertain; resyncs."""
+
+    def __init__(self, dec=decode_line, mdl=None, start=None):
+        self.dec, self.mdl, self.t = dec, mdl, start
+        self.anchored = self.predicted = self.guessed = 0
+        self.uncertain = self.resyncs = 0
+        self._open = 0              # predicted lines not yet confirmed by an anchor
+
+    def feed(self, raw):
+        """Decode one raw line (bytes, no line ending) -> str."""
+        if not raw:
+            return ""
+        t, dec = self.t, self.dec
+        d = dec(raw, t) if t is not None else None
+        if d is not None and TS.match(d):
+            self.anchored += 1
+            self._open = 0
+        else:
+            a = anchor(raw, dec)
+            if a:
+                d, t = a
+                self.anchored += 1
+                if self.t is not None:          # counter broken: resync
+                    self.resyncs += 1
+                    self.uncertain += self._open
+                self._open = 0
+            elif t is not None:
+                self.predicted += 1
+                self._open += 1
+            else:
+                d, _, margin = recover(raw, self.mdl, dec)
+                self.guessed += 1
+                if margin < UNCERTAIN_MARGIN:
+                    self.uncertain += 1
+                t = None
+        if t is not None:
+            self.t = (t + steps(raw)) % 95
+        return d
+
+    def finish(self):
+        """End of file: predicted lines no anchor confirmed count as uncertain."""
+        self.uncertain += self._open
+        self._open = 0
 
 
 # ----------------------------------------------------------------------------
@@ -1110,7 +1208,7 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
     categories (#20); res["leaks"] = {output name: {category: [lines]}}."""
     res = {"path": path, "kind": None, "outputs": [], "skipped": None, "report": report,
            "redactions": {c: 0 for c in CATEGORIES}, "warnings": [],
-           "lines": 0, "uncertain": 0, "confidence": None, "leaks": None,
+           "lines": 0, "uncertain": 0, "confidence": None, "leaks": None, "resyncs": 0,
            "guide": {"sessions": 0, "steps": 0, "drops": 0}}
 
     kind, plain = sniffed or sniff(path)
@@ -1135,18 +1233,14 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
     if kind == "guide":
         decoded = []
         filled = 0
-        mdl = None if plain else train_model(path)
+        dc = None if plain else Decoder(decode_line, *prescan(path))
         for rawl in _iter_raw(path, plain):
-            if plain:
-                d, anchored, margin = rawl.decode("latin1"), True, 0.0
-            else:
-                d, anchored, margin = recover(rawl, mdl)
+            d = rawl.decode("latin1") if plain else dc.feed(rawl)
             res["lines"] += 1
             if rawl:
                 filled += 1
-            if not anchored and margin < UNCERTAIN_MARGIN:
-                res["uncertain"] += 1
             decoded.append(red.feed(d))
+        _decoder_stats(res, dc)
         _confidence(res, filled, plain)
         _check_guide_version(decoded, res, lang)
         if report:
@@ -1216,20 +1310,17 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
         if o:
             o.write(_redaction_header(enabled, lang))
         done = filled = 0
-        mdl = None if plain else train_model(path, dec)
+        dc = None if plain else Decoder(dec, *prescan(path, dec))
         for rawl in _iter_raw(path, plain):
             done += len(rawl) + 1
             if plain:
                 # our own app output is proper UTF-8; device logs are ASCII
                 d = rawl.decode("utf-8", "replace") if app else rawl.decode("latin1")
-                anchored, margin = True, 0.0
             else:
-                d, anchored, margin = recover(rawl, mdl, dec)
+                d = dc.feed(rawl)
             res["lines"] += 1
             if rawl:
                 filled += 1
-            if not anchored and margin < UNCERTAIN_MARGIN:
-                res["uncertain"] += 1
             d = red.feed(d)
             if dater:
                 d = dater.feed(d)
@@ -1243,6 +1334,7 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
     if progress:
         progress(size, size, res["lines"])
     res["redactions"] = dict(red.counts)
+    _decoder_stats(res, dc)
     _confidence(res, filled, plain)
     if not report:
         res["outputs"].append(dec_out)
@@ -1252,6 +1344,18 @@ def process_file(path, out_dir=None, enabled=CATEGORIES, make_phd2=True,
         _leak_pass(res, enabled, leak_check)
         _log_done(res, lang, log)
     return res
+
+
+def _decoder_stats(res, dc):
+    """Copy the Decoder statistics (#47); warn if the key counter had to be
+    resynced more than RESYNC_WARN times (gaps or damaged lines in the file)."""
+    if dc is None:
+        return
+    dc.finish()
+    res["uncertain"] = dc.uncertain
+    res["resyncs"] = dc.resyncs
+    if dc.resyncs > RESYNC_WARN:
+        res["warnings"].append("resync")
 
 
 def _confidence(res, filled, plain):
@@ -1437,6 +1541,53 @@ _SELFTEST = (
      ("location",)),
 )
 
+# #47: short sequences in the real formats, encrypted with the running key
+# counter (debug: start 33, app: another start value).  Each tuple: (kind, raw
+# lines, plain lines).  The "=" separator and the gphoto "Current" line are the
+# two line types the per-line search got wrong on real logs; the app lines have
+# tab-indented stack trace lines, non-ASCII text and NUL bytes.
+_SELFTEST_SEQ = (
+    ("debug",
+     (
+      b'{SR]UZ`WZWZ[\\,Nr3@9G7UyHHAEDSQAUKRRc:YMN$',
+      b'()*+,-./0123456789:;<=>?@A',
+      b'HuunrqE,<{py!A(y+,"("/J!4351/)93),@',
+      b'GHu-/3;NOPQRSnUyNMOKJ\\%UOEWMTTZf.b',
+      b'ij?SPT``_mstu2wHj',
+      b'z{Rxpf"#$%&\'(C*_Qeb',
+      b"/0T)'(z&-89:;V=#OLQMTOW*R[TZZ\\X^Z_\\cbd`fbgdljChnjplrnwIqws}y{w"
+      b"}y~{(#%!'#(%1+-)/+0-e306294<m7@9??A=C?DAHGIEKGLIQO(LRNTPVR[-U[Wa"
+      b']_[a]b_jegciejgsmo',
+      b'pqrstuvwwxyz{|}~"#$%&\'())*+,',
+      b'X0/:27=474889g+On{t$r2V%%|"!0.|2(//@&22*'),
+     (
+      '[20:15:02.000] Camera Configuration Tree:',
+      '==========================',
+      'Config: /main/settings/customfuncex',
+      '  Label      : Custom Functions Ex',
+      '  Readonly   : No',
+      '  Type       : TEXT',
+      '  Current    : c0,1,2,3c,4,101,1,0,201,1,0,30f,1,1,1,4c,1,501,1,0,601,1,0,701,1,0,'
+      'c0,1,2,3c,4,101,1,0,201,1,0,30f,1,1,1,4c,1,501,1,0,601,1,0,701',
+      '1111111100000000111111110000',
+      '[20:15:02.100] Camera Configuration done')),
+    ("app",
+     (
+      b"jilqimolqvbut!w|$z}kjm3cSf\\=We\\e_mzg_ua/ndrl4Ptuormya%q'wX.x{)"
+      b'.$++V=&"-\'',
+      b'\t$8C\'5,;940Y=B\\w3A8A;Id=CNL>RBH.GVWFMLn1KYPYSa|[SiU/\'\'."',
+      b'\t[oz^lcrpkg2ty5Txy{q!<{!"$;`&\')}-H\'}5!YRRTK',
+      b'UTW\\TXZW\\aM`_jbgmeiVUX(=FL"ANGUE&I[Q_S_ek\xc3\xa7\xc2\x9b\xc2\xb8'
+      b'\xc3\xa6\xc2\x9c\xc2\xbalcU^bXfVjlj^x(1+.\xc3\xa2\xc2\x84\xc2\x83',
+      b'103804638=)<;F>CIAF214W\'1\\~2&!$k"0#*)7Dg:2.21Ku}hO\x00\x00\x00'),
+     (
+      '2026-01-15 20:15:13 | CrashHandler java.lang.IllegalStateException: fake',
+      '\tat android.os.Handler.dispatchMessage(Handler.java:106)',
+      '\tat android.os.Looper.loop(Looper.java:223)',
+      '2026-01-15 20:15:14 | MainCameraActivity 相机 temperature -5.0℃',
+      '2026-01-15 20:15:15 | BoxDeviceManager Bridge IP: \x00\x00\x00')),
+)
+
 
 def selftest():
     """Decode, redact and leak-check the built-in sample lines.
@@ -1461,6 +1612,21 @@ def selftest():
             ok(tag + " leak check", _leak_cats(plain, {}) == set(cats)
                and not _leak_cats(r, {}))
         except Exception as e:      # a crash is a failed selftest, not a traceback
+            failed.append("%s %s" % (tag, type(e).__name__))
+    for i, (kind, raws, plains) in enumerate(_SELFTEST_SEQ, 1):
+        dec = decode_app_line if kind == "app" else decode_line
+        tag = "seq%d/%s" % (i, kind)
+        try:
+            dc = Decoder(dec, *_prescan(raws, dec))
+            ok(tag + " decode", [dc.feed(r) for r in raws] == list(plains))
+            dc.finish()
+            ok(tag + " counter", dc.predicted == sum(1 for p in plains if not TS.match(p))
+               and not (dc.resyncs or dc.guessed or dc.uncertain))
+            # a lost line: the next anchored line resyncs the counter
+            dc = Decoder(dec, *_prescan(raws, dec))
+            got = [dc.feed(r) for r in raws[:1] + raws[2:]]
+            ok(tag + " resync", got[-1] == plains[-1] and dc.resyncs == 1 and dc.uncertain > 0)
+        except Exception as e:
             failed.append("%s %s" % (tag, type(e).__name__))
     return n, failed
 
@@ -1552,6 +1718,10 @@ _STR = {
                   "en": "  ! Decode confidence only %.1f%% (threshold %.0f%%): the log format has "
                         "probably changed (new firmware/app?). Check the output - "
                         "redaction may be incomplete."},
+    "warn_resync": {"de": "  ! Schlüsselzähler %d-mal neu synchronisiert: der Datei fehlen Teile oder "
+                          "Zeilen sind beschädigt. Zeilen vor einer Neusynchronisierung zählen als unsicher.",
+                    "en": "  ! Key counter resynced %d time(s): parts of the file are missing or lines "
+                          "are damaged. Lines before a resync count as uncertain."},
     "selftest_ok": {"de": "Selbsttest: OK (%d Beispielzeilen, %d Prüfungen)",
                     "en": "Selftest: OK (%d sample lines, %d checks)"},
     "selftest_fail": {"de": "Selbsttest FEHLGESCHLAGEN (%d von %d Prüfungen): %s\n"
@@ -1640,6 +1810,8 @@ def _log_warnings(res, lang, log):
     for w in res["warnings"]:
         if w == "low_confidence":
             log(_t(lang, "warn_conf") % (res["confidence"], CONFIDENCE_WARN))
+        elif w == "resync":
+            log(_t(lang, "warn_resync") % res["resyncs"])
         else:
             log("  ! " + w)
 

@@ -244,6 +244,12 @@ def guide_plain(version="2.0.37"):
     return L, {"sessions": 2, "steps": s1[0] + s2[0], "drops": s1[1] + s2[1]}
 
 
+SEPARATOR = "=" * 26
+CUSTOMFUNCEX = ("c0,1,2,3c,4,101,1,0,201,1,0,30f,1,1,1,4c,1,501,1,0,601,1,0,701,1,0,"
+                "c0,1,2,3c,4,101,1,0,201,1,0,30f,1,1,1,4c,1,501,1,0,601,1,0,701")
+DIGITS = "11111111000000000000000000"
+
+
 def debug_plain():
     F = FAKE
     L = []
@@ -301,7 +307,16 @@ def debug_plain():
         a("  Current    : " + cur)
         if "iso" in path:
             a("  Choices    : Auto, 100, 200, 400, 800, 1600, 3200, 6400")
-    a("11111111000000000000000000")
+    # separator and customfuncex block (#47): the per-line key search got
+    # exactly these two line types wrong on real logs
+    a("[20:15:02.500] Camera Configuration Tree:")
+    a(SEPARATOR)
+    a("Config: /main/settings/customfuncex")
+    a("  Label      : Custom Functions Ex")
+    a("  Readonly   : No")
+    a("  Type       : TEXT")
+    a("  Current    : " + CUSTOMFUNCEX)
+    a(DIGITS)
     a("")
     # filler: many anchored lines (gives the per-file model real data)
     rnd = random.Random(7)
@@ -429,14 +444,24 @@ def app_plain():
     return L
 
 
-def encrypt_app_lines(lines, seed):
-    rnd = random.Random(seed)
-    return b"\n".join(sv.encode_app_line(l, rnd.randint(0, 94)) for l in lines) + b"\n"
+def encrypt_seq(lines, start=33, enc=None):
+    """Encrypt like the device (#47): each line key comes from the running
+    counter, t0 = (start + bytes 32..126 of all previous lines) mod 95."""
+    enc = enc or sv.encode_line
+    out = []
+    t = start
+    for l in lines:
+        out.append(enc(l, t))
+        t = (t + sv.steps(out[-1])) % 95
+    return out
 
 
-def encrypt_lines(lines, seed):
-    rnd = random.Random(seed)
-    return b"\n".join(sv.encode_line(l, rnd.randint(0, 94)) for l in lines) + b"\n"
+def encrypt_app_lines(lines, start=33):
+    return b"\n".join(encrypt_seq(lines, start, sv.encode_app_line)) + b"\n"
+
+
+def encrypt_lines(lines, start=33):
+    return b"\n".join(encrypt_seq(lines, start)) + b"\n"
 
 
 def write(path, data):
@@ -589,10 +614,10 @@ def t_decode_exact(fx, tmp):
     bad = [i for i, (g, e) in enumerate(zip(got, exp)) if g != e]
     check("DebugLog: all %d lines exact (incl. camera config dump)" % len(exp),
           len(got) == len(exp) and not bad, "mismatches at %s" % bad[:5])
-    # the bit-string line '1111...000' is inherently ambiguous (a shifted key gives
-    # another all-digit string), so exactly that one line must be flagged uncertain
-    check("DebugLog: exactly the ambiguous digit line is flagged uncertain",
-          r["uncertain"] == 1, str(r["uncertain"]))
+    # the bit-string line '1111...000' was ambiguous for the per-line key search;
+    # the running key counter (#47) decodes it with certainty
+    check("DebugLog: no uncertain lines (digit-only line from the key counter)",
+          r["uncertain"] == 0 and r["resyncs"] == 0, "%d %d" % (r["uncertain"], r["resyncs"]))
     _, anch, mg = sv.recover(sv.encode_line("  Label      : ISO Speed", 40), sv.train_model(fx["debug"]))
     check("unambiguous text line without anchor: large margin", not anch and mg >= sv.UNCERTAIN_MARGIN, "%.1f" % mg)
 
@@ -1326,8 +1351,8 @@ def t_app(fx, tmp):
     moj = samples[0].encode("utf-8").decode("latin1").encode("utf-8")      # double-encoded UTF-8
     check("app cipher: non-ASCII bytes are the double-encoded UTF-8, passed through unchanged",
           bytes(b for b in raw if b >= 0x80) == bytes(b for b in moj if b >= 0x80))
-    check("app cipher: byte decoder (device logs) garbles text after a non-ASCII char",
-          sv.decode_line(sv.encode_app_line("ab 相机 temperature", 3), 3).endswith("temperature") is False)
+    check("cipher: bytes >= 0x80 do not advance the key position in device lines either (#47)",
+          sv.decode_line(sv.encode_app_line("ab 相机 temperature", 3), 3).endswith(" temperature"))
     check("app cipher: anchored via timestamp", sv.try_known(raw, sv.decode_app_line) == samples[0])
 
     check("sniff: encrypted app log", sv.sniff(fx["app"]) == ("app", False), str(sv.sniff(fx["app"])))
@@ -1498,8 +1523,8 @@ def t_any_net(fx, tmp):
     d = os.path.join(tmp, "anynet_in")
     pdeb = os.path.join(d, "DebugLog_2026-01-15_201500.txt")
     pgui = os.path.join(d, "GuideLog_2026-01-15_201500.txt")
-    write(pdeb, encrypt_lines(deb, 31))
-    write(pgui, encrypt_lines(gl, 32))
+    write(pdeb, encrypt_lines(deb))
+    write(pgui, encrypt_lines(gl))
 
     def run(sub, enabled=sv.CATEGORIES):
         res = sv.process_all([pdeb, pgui], log=quiet, status=quiet, enabled=enabled,
@@ -1570,10 +1595,10 @@ def t_placeholders(fx, tmp):
     d = os.path.join(tmp, "ph_in")
     paths = {}
     for n, (name, data) in enumerate((
-            ("deb_a", ("DebugLog_2026-01-15_201500.txt", encrypt_lines(deb_a, 21))),
-            ("deb_b", ("DebugLog_2026-01-16_201500.txt", encrypt_lines(deb_b, 22))),
-            ("app_a", ("Logs_App_20260115201500.txt", encrypt_app_lines(app_a, 23))),
-            ("app_b", ("Logs_App_20260116201500.txt", encrypt_app_lines(app_b, 24))))):
+            ("deb_a", ("DebugLog_2026-01-15_201500.txt", encrypt_lines(deb_a))),
+            ("deb_b", ("DebugLog_2026-01-16_201500.txt", encrypt_lines(deb_b))),
+            ("app_a", ("Logs_App_20260115201500.txt", encrypt_app_lines(app_a))),
+            ("app_b", ("Logs_App_20260116201500.txt", encrypt_app_lines(app_b))))):
         paths[name] = os.path.join(d, data[0])
         write(paths[name], data[1])
 
@@ -1858,8 +1883,7 @@ def t_confidence(fx, tmp):
     os.makedirs(out)
     res = {k: sv.process_file(fx[k], out_dir=out, log=quiet) for k in ("guide", "debug", "app")}
     for k, r in res.items():
-        # the DebugLog fixture has one inherently ambiguous digit-only line
-        want = 100.0 if k != "debug" else math.floor(1000.0 * (r["lines"] - 2) / (r["lines"] - 1)) / 10
+        want = 100.0
         check("confidence of the %s fixture: %.1f" % (k, want), r["confidence"] == want,
               "%s (uncertain %d)" % (r["confidence"], r["uncertain"]))
         check("no confidence warning for the %s fixture" % k, "low_confidence" not in r["warnings"],
@@ -1872,8 +1896,7 @@ def t_confidence(fx, tmp):
     # simulated format change: the first lines (with the type markers) stay as
     # they are, the 400 filler lines are reversed, i.e. no longer decodable
     dl = fx["debug_lines"]
-    rnd = random.Random(21)
-    enc = [sv.encode_line(l, rnd.randint(0, 94)) for l in dl]
+    enc = encrypt_seq(dl)
     bad = enc[:60] + [e[::-1] for e in enc[60:]]
     pb = os.path.join(d, "DebugLog_2026-01-15_201502.txt")
     write(pb, b"\n".join(bad) + b"\n")
@@ -1897,7 +1920,7 @@ def t_confidence(fx, tmp):
     tab = sv.results_table([res["debug"], rb, rg], "en")
     col = tab[0].index("Conf")
     cells = [row[:col + len("Conf")].split()[-1] for row in tab[2:]]
-    check("table: 'Conf' column (99.7%, value with '!' below threshold, '-' for glog)",
+    check("table: 'Conf' column (100.0%, value with '!' below threshold, '-' for glog)",
           cells == ["%.1f%%" % res["debug"]["confidence"], "%.1f%%!" % rb["confidence"], "-"], "\n".join(tab))
     check("table DE: column 'sicher'", " sicher " in sv.results_table([rb], "de")[0], sv.results_table([rb], "de")[0])
     msgs = []
@@ -1933,6 +1956,96 @@ def t_confidence(fx, tmp):
           cp.stdout + cp.stderr)
 
 
+def t_counter(fx, tmp):
+    """#47: the line key comes from a running counter over the whole file."""
+    print("\n[24] Running key counter (#47)")
+    check("steps: only bytes 32..126 advance the key (tab, NUL, CR, >= 0x80 do not)",
+          sv.steps(b"ab\tc\x00\r\xc3\xa7 ~") == 5, str(sv.steps(b"ab\tc\x00\r\xc3\xa7 ~")))
+    ok = all(sv.encode_line("ab\tcd\x00ef", t).translate(None, b"\t\x00") == sv.encode_line("abcdef", t)
+             and sv.decode_line(sv.encode_line("ab\tcd\x00ef", t), t) == "ab\tcd\x00ef" for t in range(95))
+    check("cipher: tab and NUL inside a line pass through and do not advance the key", ok)
+    ok = all(sv.decode_app_line(sv.encode_app_line(x, t), t) == x for t in range(95)
+             for x in ("\tat a.b(C.java:1)\tx 相机 y", "x\t\ty", "\t\t"))
+    check("app cipher: round trip with leading and inner tabs for all 95 keys", ok)
+
+    # per-file start value, taken from the first anchored line
+    check("prescan: start value 33 (DebugLog fixture)", sv.prescan(fx["debug"])[1] == 33,
+          str(sv.prescan(fx["debug"])[1]))
+    check("prescan: other start value of the app fixture found (50)",
+          sv.prescan(fx["app"], sv.decode_app_line)[1] == 50, str(sv.prescan(fx["app"], sv.decode_app_line)[1]))
+    check("prescan: lines before the first anchor counted (GuideLog preamble)",
+          sv.prescan(fx["guide"])[1] == 33, str(sv.prescan(fx["guide"])[1]))
+
+    # the two line types the per-line search got wrong on real logs
+    dl = fx["debug_lines"]
+    raws = encrypt_seq(dl)
+    cur = "  Current    : " + CUSTOMFUNCEX
+    mdl = sv.train_model(fx["debug"])
+    bf = {l: sv.recover(r, mdl) for l, r in zip(dl, raws) if l in (SEPARATOR, cur)}
+    check("fixture is meaningful: the per-line search gets '=' and customfuncex lines wrong",
+          len(bf) == 2 and all(v[0] != l for l, v in bf.items()), str({l[:12]: v[0][:12] for l, v in bf.items()}))
+    check("fixture is meaningful: the wrong customfuncex line has a large margin (looked certain)",
+          cur in bf and bf[cur][2] >= sv.UNCERTAIN_MARGIN, "%.1f" % bf.get(cur, ("", 0, 0))[2])
+
+    def decoded(path, **kw):
+        out = os.path.join(tmp, "o_cnt_%d" % len(os.listdir(tmp)))
+        r = sv.process_file(path, out_dir=out, enabled=(), full_date=False, log=kw.pop("log", quiet), **kw)
+        return r, body(r["outputs"][0]) if r["outputs"] else []
+    r, got = decoded(fx["debug"])
+    check("DebugLog: '=' separator, customfuncex and digit line decoded exactly",
+          SEPARATOR in got and cur in got and DIGITS in got and r["uncertain"] == 0)
+    feed = sv.Decoder.feed
+    sv.Decoder.feed = lambda self, raw: sv.recover(raw, self.mdl, self.dec)[0]     # per-line search only
+    try:
+        _, got_bf = decoded(fx["debug"])
+    finally:
+        sv.Decoder.feed = feed
+    check("counter-check: with the per-line search only, these lines come out wrong",
+          SEPARATOR not in got_bf and cur not in got_bf, "")
+
+    # a lost line: the next anchored line resyncs, the lines in between are uncertain
+    k = dl.index(SEPARATOR)
+    nxt = next(i for i in range(k + 1, len(dl)) if sv.TS.match(dl[i]))
+    between = sum(1 for l in dl[k + 1:nxt] if l)
+    p = os.path.join(tmp, "cnt", "DebugLog_2026-01-15_201505.txt")
+    write(p, b"\n".join(raws[:k] + raws[k + 1:]) + b"\n")
+    msgs = []
+    r, got = decoded(p, log=msgs.append)
+    check("lost line: one resync, warning 'resync'", r["resyncs"] == 1 and "resync" in r["warnings"],
+          "%s %s" % (r["resyncs"], r["warnings"]))
+    check("lost line: the predicted lines before the resync count as uncertain (%d)" % between,
+          r["uncertain"] == between and r["confidence"] < 100.0, "%d %s" % (r["uncertain"], r["confidence"]))
+    check("lost line: everything from the resync on decoded exactly", got[nxt - 1:] == dl[nxt:])
+    check("lost line: readable warning", any("Key counter resynced 1 time" in m for m in msgs), "\n".join(msgs))
+    msgs = []
+    sv.process_file(p, out_dir=os.path.join(tmp, "cnt", "de"), enabled=(), lang="de", log=msgs.append)
+    check("lost line: warning in German", any("Schlüsselzähler 1-mal neu synchronisiert" in m for m in msgs),
+          "\n".join(msgs))
+    # an inserted (duplicated) anchored line: one resync on it, the next line fits again
+    j = len(dl) - 5
+    p = os.path.join(tmp, "cnt", "DebugLog_2026-01-15_201506.txt")
+    write(p, b"\n".join(raws[:j] + [raws[j - 1]] + raws[j:]) + b"\n")
+    r, got = decoded(p)
+    check("inserted line: one resync, all lines still exact",
+          r["resyncs"] == 1 and got == dl[:j] + [dl[j - 1]] + dl[j:], str(r["resyncs"]))
+    # truncated after predicted lines: nothing confirms them
+    p = os.path.join(tmp, "cnt", "DebugLog_2026-01-15_201507.txt")
+    write(p, b"\n".join(raws[:k + 1]) + b"\n")
+    r, got = decoded(p)
+    check("predicted lines no anchor confirms (end of file) count as uncertain",
+          r["uncertain"] == 1 and r["resyncs"] == 0 and got == dl[:k + 1], "%d" % r["uncertain"])
+    # no anchored line at all: per-line search as fallback
+    gl = fx["guide_lines"][:4]
+    dc = sv.Decoder(sv.decode_line, *sv._prescan(encrypt_seq(gl)))
+    got = [dc.feed(x) for x in encrypt_seq(gl)]
+    check("no anchor at all: per-line search as fallback",
+          dc.t is None and dc.guessed == 4 and dc.predicted == 0 and got == gl, "%s %s" % (dc.guessed, got))
+    # an intact file never resyncs
+    rs = {k: sv.process_file(fx[k], out_dir=os.path.join(tmp, "cnt", "ok"), log=quiet)["resyncs"]
+          for k in ("guide", "debug", "app")}
+    check("intact fixtures: no resync", not any(rs.values()), str(rs))
+
+
 def t_selftest(fx, tmp):
     """#9: built-in sample lines, --selftest and the silent check before every run."""
     print("\n[23] Selftest (#9)")
@@ -1962,6 +2075,28 @@ def t_selftest(fx, tmp):
         finally:
             setattr(sv, attr, orig)
         check("selftest fails with a broken %s" % name, any(f.endswith(part) for f in failed), str(failed))
+    # #47: counter sequences
+    seq = [p for _, _, ps in sv._SELFTEST_SEQ for p in ps]
+    check("selftest has counter sequences with '=', customfuncex, digit, tab, non-ASCII and NUL lines",
+          {"debug", "app"} == {k for k, *_ in sv._SELFTEST_SEQ} and "=" * 26 in seq
+          and any("Current" in p and "," in p for p in seq) and any(p.isdigit() for p in seq)
+          and any(p.startswith("\t") for p in seq) and any(not p.isascii() for p in seq)
+          and any("\0" in p for p in seq))
+    for name, attr, bad, part in (
+            ("per-line search only", "feed", lambda self, raw: sv.recover(raw, None, self.dec)[0], "seq1/debug decode"),
+            ("decoder without resync", "feed", None, "seq1/debug resync")):
+        orig = sv.Decoder.feed
+        if bad is None:                 # anchors never move the counter
+            def bad(self, raw, f=orig):
+                d = f(self, raw)
+                self.resyncs = 0
+                return d
+        sv.Decoder.feed = bad
+        try:
+            failed = sv.selftest()[1]
+        finally:
+            sv.Decoder.feed = orig
+        check("selftest fails with a %s" % name, part in failed, str(failed))
     # #48: the AstroChartUtil sample line fails without its rules
     check("selftest has the AstroChartUtil line (#48)",
           any("AstroChartUtil" in p for _, _, p, _, _ in sv._SELFTEST))
@@ -2032,12 +2167,12 @@ def build_fixtures(tmp):
     fx["debug"] = os.path.join(d, "DebugLog_2026-01-15_201500.txt")
     fx["glog"] = os.path.join(d, "libtoupcam_latest.glog")
     fx["unknown"] = os.path.join(d, "notes.txt")
-    write(fx["guide"], encrypt_lines(gl, 11))
-    write(fx["debug"], encrypt_lines(dl, 12))
+    write(fx["guide"], encrypt_lines(gl))
+    write(fx["debug"], encrypt_lines(dl))
     write(fx["glog"], "\n".join(GLOG_PLAIN) + "\n")
     write(fx["unknown"], "shopping list\nmilk\nbread\n")
     write(os.path.join(d, "image.fits"), b"SIMPLE  =                    T")
-    write(os.path.join(d, "sub", "DebugLog_2026-01-16_010000.txt"), encrypt_lines(dl[:50], 13))
+    write(os.path.join(d, "sub", "DebugLog_2026-01-16_010000.txt"), encrypt_lines(dl[:50]))
     # extra inputs kept outside the main folder
     e = os.path.join(tmp, "extra")
     fx["guide_plain"] = os.path.join(e, "GuideLog_plain.txt")
@@ -2045,13 +2180,13 @@ def build_fixtures(tmp):
     fx["debug_plain"] = os.path.join(e, "DebugLog_plain.txt")
     write(fx["debug_plain"], "\n".join(dl) + "\n")
     fx["debug_nodate"] = os.path.join(e, "DebugLog_nodate.txt")
-    write(fx["debug_nodate"], encrypt_lines(dl, 14))
+    write(fx["debug_nodate"], encrypt_lines(dl))
     fx["app_lines"] = al = app_plain()
     fx["app"] = os.path.join(e, "Logs_App_20260115201500.txt")
-    write(fx["app"], encrypt_app_lines(al, 16))
+    write(fx["app"], encrypt_app_lines(al, 50))   # not the usual start value (#47)
     gv9, _ = guide_plain(version="9.9.9")
     fx["guide_v9"] = os.path.join(e, "GuideLog_2026-01-15_201501.txt")
-    write(fx["guide_v9"], encrypt_lines(gv9, 15))
+    write(fx["guide_v9"], encrypt_lines(gv9))
     return fx
 
 
@@ -2151,6 +2286,7 @@ def main():
         t_leak_check(fx, tmp)
         t_confidence(fx, tmp)
         t_selftest(fx, tmp)
+        t_counter(fx, tmp)
         t_issue_template()
         t_log_sample_template()
         t_gui(fx, tmp)
