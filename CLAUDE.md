@@ -216,7 +216,9 @@ PHD2-like, but with StellaVita-specific lines:
 - **Meridian flip lines** (timestamped): `MeridianFlip::calculateData meridian RA (LST):-1.234567`,
   followed by `MeridianFlip::flipIfNeeded 0 compare meridian offset:-1.234567` with the
   same value (6 decimals or `nan`), plus `MeridianFlip::update 0 from (a,b) to (c,d)`
-  (two number pairs, presumably target RA/Dec, not verified; kept),
+  (RA/Dec: verified 2026-11-06 on the real logs, every numeric pair equals a logged
+  INDI RA/DEC pair, none an ALT/AZ pair; `(nan,…)` and a constant start value above
+  360 occur; kept, like RA/Dec),
   `::start`, `::stop`. See location redaction (#50).
 - **Source paths:** ToupTek's own build paths appear in error lines. These are not
   user data.
